@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cd d:\\\\erp\\\\dashboard; npm install)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cd d:\\\\erp\\\\dashboard; npm run build)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cd d:\\\\erp\\\\dashboard; $p = Start-Process npm -ArgumentList \"run\",\"dev\" -PassThru -WindowStyle Hidden; Start-Sleep -Seconds 6; try { $r = Invoke-WebRequest http://localhost:5173 -UseBasicParsing -TimeoutSec 5; Write-Output \"HTTP $\\($r.StatusCode\\)\" } catch { Write-Output \"ERR: $_\" }; Stop-Process -Id $p.Id -Force; Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force)"
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# 환경변수(비밀키) — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+# 수집된 실데이터(사업자번호·매출·연락처 등) — 깃허브에 올리지 않음(스크래퍼가 재생성)
+server/data/*.json
+server/data/*.png
+server/data/_*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
