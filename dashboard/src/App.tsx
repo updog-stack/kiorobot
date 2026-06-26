@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Sidebar, type NavItem } from "./components/Sidebar";
 import { Header, type Role } from "./components/Header";
 import { Card } from "./components/Card";
-import { SalesMetrics } from "./components/SalesMetrics";
+import { Overview } from "./components/Overview";
+import { Schedule } from "./components/Schedule";
+import { ManagementMetrics } from "./components/ManagementMetrics";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
 import { CsStatus } from "./components/CsStatus";
@@ -48,16 +50,9 @@ function App() {
 
         <main className="content">
           {active === "overview" && (
-            <>
-              <Card title="CS 현황" description="미처리 문의 · 평균 응답 시간" />
-              <Card title="오늘의 일정" description="미팅 · 마감 · 업무" />
-              <Card title="진행 중 업무" description="프로젝트 · 태스크 진행 상태" />
-              <Card
-                title="경영 지표 추이"
-                description="기간별 매출 · 비용 · KPI"
-                wide
-              />
-            </>
+            <div className="full">
+              <Overview />
+            </div>
           )}
 
           {active === "cs" && (
@@ -77,11 +72,9 @@ function App() {
           )}
 
           {active === "schedule" && (
-            <Card
-              title="일정"
-              description="구글캘린더 → 노션 일정 DB. 미팅 · 마감 · 업무 일정."
-              wide
-            />
+            <div className="full">
+              <Schedule />
+            </div>
           )}
 
           {active === "tasks" && (
@@ -94,7 +87,7 @@ function App() {
 
           {active === "metrics" && (
             <div className="full">
-              <SalesMetrics />
+              <ManagementMetrics />
             </div>
           )}
 

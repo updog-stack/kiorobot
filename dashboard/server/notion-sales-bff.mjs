@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
+import { createSign } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import { Client } from "@notionhq/client";
@@ -46,6 +47,33 @@ if (!NOTION_TOKEN) {
   console.error("환경변수 NOTION_TOKEN 이 필요합니다 (.env).");
   process.exit(1);
 }
+
+// 구글캘린더 — 일정 탭용. 미설정이어도 BFF는 정상 기동.
+// 방식 A(간단): GOOGLE_CALENDAR_ICS_URL — 캘린더 설정의 'iCal 비공개 주소' 한 줄
+// 방식 B(서비스계정): GOOGLE_SA_EMAIL + GOOGLE_SA_PRIVATE_KEY + GOOGLE_CALENDAR_ID
+const {
+  GOOGLE_CALENDAR_ICS_URL,
+  GOOGLE_SA_EMAIL,
+  GOOGLE_SA_PRIVATE_KEY,
+  GOOGLE_CALENDAR_ID,
+  GOOGLE_CALENDARS, // 양방향(쓰기)용: "라벨|캘린더ID,라벨|캘린더ID"
+} = process.env;
+
+// 서비스계정 + GOOGLE_CALENDARS 가 있으면 API 양방향 모드(생성·수정·삭제 가능)
+const API_CALENDARS = (GOOGLE_CALENDARS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((entry, i) => {
+    const pipe = entry.indexOf("|");
+    return pipe === -1
+      ? { label: `캘린더${i + 1}`, id: entry }
+      : { label: entry.slice(0, pipe).trim(), id: entry.slice(pipe + 1).trim() };
+  });
+const API_MODE = Boolean(
+  GOOGLE_SA_EMAIL && GOOGLE_SA_PRIVATE_KEY && API_CALENDARS.length
+);
+const TZ = "Asia/Seoul";
 
 // 합산할 매출 데이터소스 정의
 const SOURCES = [
@@ -825,6 +853,332 @@ app.post("/api/playbooks/generate", async (_req, res) => {
     const next = { playbooks: [...generated, ...cur.playbooks] };
     await writeFile(PLAYBOOKS_JSON, JSON.stringify(next, null, 2));
     res.json({ added: generated.length, data: next });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ===== 구글캘린더 일정 (읽기 전용) =====
+// 서비스 계정 JWT → OAuth 토큰 발급 → Calendar v3 events 조회. (googleapis 의존성 없이 내장 crypto 사용)
+const b64url = (input) =>
+  Buffer.from(input)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+let gToken = { value: null, exp: 0 };
+
+async function getGoogleToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (gToken.value && gToken.exp - 60 > now) return gToken.value;
+  if (!GOOGLE_SA_EMAIL || !GOOGLE_SA_PRIVATE_KEY) {
+    throw new Error(
+      "구글 서비스계정 미설정 (.env: GOOGLE_SA_EMAIL, GOOGLE_SA_PRIVATE_KEY)"
+    );
+  }
+  const key = GOOGLE_SA_PRIVATE_KEY.replace(/\\n/g, "\n");
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = b64url(
+    JSON.stringify({
+      iss: GOOGLE_SA_EMAIL,
+      scope: "https://www.googleapis.com/auth/calendar",
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+    })
+  );
+  const signer = createSign("RSA-SHA256");
+  signer.update(`${header}.${claim}`);
+  const sig = signer
+    .sign(key)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  const assertion = `${header}.${claim}.${sig}`;
+
+  const r = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  const body = await r.json();
+  if (!r.ok)
+    throw new Error(
+      `구글 인증 실패: ${body.error_description || body.error || r.status}`
+    );
+  gToken = { value: body.access_token, exp: now + (body.expires_in || 3600) };
+  return gToken.value;
+}
+
+// "라벨|url,라벨|url" 또는 "url,url" 형식 파싱 (URL에는 , | 가 없음)
+function parseIcsCalendars(raw) {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry, i) => {
+      const pipe = entry.indexOf("|");
+      if (pipe === -1) return { label: `캘린더${i + 1}`, url: entry };
+      return {
+        label: entry.slice(0, pipe).trim(),
+        url: entry.slice(pipe + 1).trim(),
+      };
+    });
+}
+
+// 방식 A: iCal(.ics) URL 파싱 — 반복 일정(RRULE)도 기간 내로 펼쳐서 반환
+async function eventsFromIcs(icsUrl, label, rangeStart, rangeEnd) {
+  const ical = (await import("node-ical")).default;
+  const data = await ical.async.fromURL(icsUrl);
+  const out = [];
+  const push = (ev, start, end) =>
+    out.push({
+      id: `${label}-${ev.uid || ev.summary}-${start.getTime()}`,
+      title: ev.summary || "(제목 없음)",
+      cal: label,
+      start: start.toISOString(),
+      end: end ? end.toISOString() : null,
+      allDay: ev.datetype === "date",
+      location: ev.location || null,
+      description: ev.description || null,
+      organizer:
+        (ev.organizer && (ev.organizer.params?.CN || ev.organizer.val)) || null,
+      url: typeof ev.url === "string" ? ev.url : null,
+    });
+
+  for (const key of Object.keys(data)) {
+    const ev = data[key];
+    if (!ev || ev.type !== "VEVENT" || !ev.start) continue;
+    const durMs = ev.end ? ev.end.getTime() - ev.start.getTime() : 0;
+
+    if (ev.rrule) {
+      const exdates = Object.values(ev.exdate || {}).map((d) =>
+        new Date(d).toDateString()
+      );
+      for (const d of ev.rrule.between(rangeStart, rangeEnd, true)) {
+        const dayStr = d.toDateString();
+        const rec = ev.recurrences && ev.recurrences[d.toISOString().slice(0, 10)];
+        if (rec) {
+          push(rec, rec.start, rec.end);
+          continue;
+        }
+        if (exdates.includes(dayStr)) continue;
+        push(ev, d, new Date(d.getTime() + durMs));
+      }
+    } else if (ev.start >= rangeStart && ev.start <= rangeEnd) {
+      push(ev, ev.start, ev.end);
+    }
+  }
+  return out;
+}
+
+// 여러 캘린더를 병렬로 조회·병합
+async function eventsFromIcsAll(raw, rangeStart, rangeEnd) {
+  const cals = parseIcsCalendars(raw);
+  const results = await Promise.all(
+    cals.map((c) => eventsFromIcs(c.url, c.label, rangeStart, rangeEnd))
+  );
+  const events = results.flat();
+  events.sort((a, b) => new Date(a.start) - new Date(b.start));
+  return { calendars: cals.map((c) => c.label), events: events.slice(0, 200) };
+}
+
+// ===== 방식 B: 서비스계정 + Calendar API (양방향) =====
+const calApi = (path) =>
+  `https://www.googleapis.com/calendar/v3/calendars/${path}`;
+
+async function gFetch(url, init = {}) {
+  const token = await getGoogleToken();
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+  const body = r.status === 204 ? {} : await r.json();
+  if (!r.ok)
+    throw new Error(body?.error?.message || `구글 캘린더 오류: ${r.status}`);
+  return body;
+}
+
+const labelToId = (label) =>
+  API_CALENDARS.find((c) => c.label === label)?.id || null;
+const idToLabel = (id) =>
+  API_CALENDARS.find((c) => c.id === id)?.label || id;
+
+function mapApiEvent(e, calId) {
+  return {
+    id: `${calId}::${e.id}`,
+    eventId: e.id,
+    calendarId: calId,
+    cal: idToLabel(calId),
+    title: e.summary || "(제목 없음)",
+    start: e.start?.dateTime || e.start?.date || null,
+    end: e.end?.dateTime || e.end?.date || null,
+    allDay: !e.start?.dateTime,
+    location: e.location || null,
+    description: e.description || null,
+    organizer: e.organizer?.displayName || e.organizer?.email || null,
+    url: e.htmlLink || null,
+  };
+}
+
+async function eventsFromApiAll(rangeStart, rangeEnd) {
+  const lists = await Promise.all(
+    API_CALENDARS.map(async (c) => {
+      const url = new URL(calApi(`${encodeURIComponent(c.id)}/events`));
+      url.searchParams.set("timeMin", rangeStart.toISOString());
+      url.searchParams.set("timeMax", rangeEnd.toISOString());
+      url.searchParams.set("singleEvents", "true");
+      url.searchParams.set("orderBy", "startTime");
+      url.searchParams.set("maxResults", "250");
+      const body = await gFetch(url);
+      return (body.items || []).map((e) => mapApiEvent(e, c.id));
+    })
+  );
+  const events = lists.flat();
+  events.sort((a, b) => new Date(a.start) - new Date(b.start));
+  return { calendars: API_CALENDARS.map((c) => c.label), events };
+}
+
+// 우리 payload → 구글 이벤트 리소스
+function toGoogleEvent(p) {
+  const ev = {
+    summary: p.title || "(제목 없음)",
+    location: p.location || undefined,
+    description: p.description || undefined,
+  };
+  if (p.allDay) {
+    // 종일: end.date 는 배타적(exclusive) → 마지막날 +1
+    const startDate = p.start.slice(0, 10);
+    const endBase = (p.end || p.start).slice(0, 10);
+    const ex = new Date(`${endBase}T00:00:00`);
+    ex.setDate(ex.getDate() + 1);
+    ev.start = { date: startDate };
+    ev.end = { date: ex.toISOString().slice(0, 10) };
+  } else {
+    ev.start = { dateTime: new Date(p.start).toISOString(), timeZone: TZ };
+    const end = p.end ? new Date(p.end) : new Date(new Date(p.start).getTime() + 3600000);
+    ev.end = { dateTime: end.toISOString(), timeZone: TZ };
+  }
+  return ev;
+}
+
+app.get("/api/schedule", async (req, res) => {
+  const now = new Date();
+  const parseDate = (v, fallback) => {
+    if (!v) return fallback;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? fallback : d;
+  };
+  const rangeStart = parseDate(req.query.from, now);
+  const rangeEnd = parseDate(
+    req.query.to,
+    new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+  );
+  try {
+    // API 모드 우선(양방향). 미설정 시 iCal(읽기 전용)로 폴백.
+    if (API_MODE) {
+      const { calendars, events } = await eventsFromApiAll(rangeStart, rangeEnd);
+      return res.json({
+        configured: true,
+        editable: true,
+        calendar: calendars.join(" · "),
+        calendars,
+        fetchedAt: now.toISOString(),
+        events,
+      });
+    }
+    if (GOOGLE_CALENDAR_ICS_URL) {
+      const { calendars, events } = await eventsFromIcsAll(
+        GOOGLE_CALENDAR_ICS_URL,
+        rangeStart,
+        rangeEnd
+      );
+      return res.json({
+        configured: true,
+        editable: false,
+        calendar: calendars.join(" · "),
+        calendars,
+        fetchedAt: now.toISOString(),
+        events,
+      });
+    }
+    return res.json({
+      configured: false,
+      editable: false,
+      events: [],
+      note: "구글캘린더 미설정: 양방향 편집은 .env 에 GOOGLE_SA_EMAIL·GOOGLE_SA_PRIVATE_KEY·GOOGLE_CALENDARS 를 설정하세요.",
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// 일정 생성
+app.post("/api/schedule", async (req, res) => {
+  if (!API_MODE)
+    return res.status(400).json({ error: "양방향(쓰기) 모드가 아닙니다." });
+  try {
+    const p = req.body || {};
+    const calId = labelToId(p.cal) || (API_CALENDARS[0] && API_CALENDARS[0].id);
+    if (!calId) throw new Error("대상 캘린더를 찾을 수 없습니다.");
+    if (!p.start) throw new Error("시작 일시가 필요합니다.");
+    const body = await gFetch(calApi(`${encodeURIComponent(calId)}/events`), {
+      method: "POST",
+      body: JSON.stringify(toGoogleEvent(p)),
+    });
+    res.json(mapApiEvent(body, calId));
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// 일정 수정
+app.patch("/api/schedule/:eventId", async (req, res) => {
+  if (!API_MODE)
+    return res.status(400).json({ error: "양방향(쓰기) 모드가 아닙니다." });
+  try {
+    const p = req.body || {};
+    const calId = p.calendarId || labelToId(p.cal);
+    if (!calId) throw new Error("대상 캘린더를 찾을 수 없습니다.");
+    const body = await gFetch(
+      calApi(
+        `${encodeURIComponent(calId)}/events/${encodeURIComponent(
+          req.params.eventId
+        )}`
+      ),
+      { method: "PATCH", body: JSON.stringify(toGoogleEvent(p)) }
+    );
+    res.json(mapApiEvent(body, calId));
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// 일정 삭제
+app.delete("/api/schedule/:eventId", async (req, res) => {
+  if (!API_MODE)
+    return res.status(400).json({ error: "양방향(쓰기) 모드가 아닙니다." });
+  try {
+    const calId = req.query.calendarId;
+    if (!calId) throw new Error("calendarId 가 필요합니다.");
+    await gFetch(
+      calApi(
+        `${encodeURIComponent(calId)}/events/${encodeURIComponent(
+          req.params.eventId
+        )}`
+      ),
+      { method: "DELETE" }
+    );
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
