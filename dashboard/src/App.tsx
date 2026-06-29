@@ -1,20 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sidebar, type NavItem } from "./components/Sidebar";
 import { Header, type Role } from "./components/Header";
+import { Login } from "./components/Login";
+import { getSession, logout } from "./lib/auth";
 import { Card } from "./components/Card";
 import { Overview } from "./components/Overview";
 import { Schedule } from "./components/Schedule";
 import { ManagementMetrics } from "./components/ManagementMetrics";
+import { BlogChecker } from "./components/BlogChecker";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
 import { CsStatus } from "./components/CsStatus";
 import { CallHeatmap } from "./components/CallHeatmap";
-import { Playbooks } from "./components/Playbooks";
+import { Knowledge } from "./components/Knowledge";
 import "./App.css";
 
 const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
   { key: "cs", label: "CS 현황", icon: "💬" },
+  { key: "blog", label: "블로그 검사기", icon: "📝" },
   { key: "playbooks", label: "꿀팁게시판", icon: "💡" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "tasks", label: "업무 / 할 일", icon: "✅" },
@@ -33,8 +37,28 @@ const ROLE_SUBTITLE: Record<Role, string> = {
 function App() {
   const [active, setActive] = useState("overview");
   const [role, setRole] = useState<Role>("lead");
+  // "checking" → 세션 확인 중, "in" → 접속 허용, "out" → 로그인 필요
+  const [authState, setAuthState] = useState<"checking" | "in" | "out">("checking");
+
+  useEffect(() => {
+    getSession()
+      .then((s) => setAuthState(!s.authRequired || s.authed ? "in" : "out"))
+      .catch(() => setAuthState("out"));
+  }, []);
 
   const current = NAV.find((n) => n.key === active)!;
+
+  if (authState === "checking") {
+    return <div className="auth-loading">확인 중…</div>;
+  }
+  if (authState === "out") {
+    return <Login onSuccess={() => setAuthState("in")} />;
+  }
+
+  async function handleLogout() {
+    await logout();
+    setAuthState("out");
+  }
 
   return (
     <div className="app">
@@ -46,6 +70,7 @@ function App() {
           subtitle={ROLE_SUBTITLE[role]}
           role={role}
           onRoleChange={setRole}
+          onLogout={handleLogout}
         />
 
         <main className="content">
@@ -65,11 +90,13 @@ function App() {
             </div>
           )}
 
-          {active === "playbooks" && (
+          {active === "blog" && (
             <div className="full">
-              <Playbooks />
+              <BlogChecker />
             </div>
           )}
+
+          {active === "playbooks" && <Knowledge />}
 
           {active === "schedule" && (
             <div className="full">

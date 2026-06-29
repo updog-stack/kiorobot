@@ -2,6 +2,10 @@
 서버구축_배포_전과정_기록.md
 서버구축_배포_전과정_기록.html
 
+# 블로그 검사기 원본 소스(별도 프로젝트). 기능은 dashboard로 이식됨(BlogChecker.tsx/blog.ts/api).
+# 자체 .git·node_modules·.env.local(비밀키)을 포함하므로 메인 저장소에서 제외.
+daininc-naver-blog/
+
 # OS / 에디터
 .DS_Store
 Thumbs.db

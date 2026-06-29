@@ -21,6 +21,7 @@ dist-ssr
 server/data/*.json
 server/data/*.png
 server/data/_*
+server/data/uploads/
 
 # Editor directories and files
 .vscode/*

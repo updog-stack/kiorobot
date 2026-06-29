@@ -9,21 +9,21 @@
 //   → 두 DB를 합산하여 전체 매출로 제공.
 //
 // 사용법:
-//   1) npm i express cors dotenv @notionhq/client
+//   1) npm i express dotenv @notionhq/client
 //   2) .env 에 NOTION_TOKEN 작성
 //   3) node server/notion-sales-bff.mjs
 //   4) src/lib/sales.ts 의 USE_MOCK = false
 
 import "dotenv/config";
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { createSign } from "node:crypto";
 import express from "express";
-import cors from "cors";
 import { Client } from "@notionhq/client";
+import { createAuth, parseCookies, buildCookie, COOKIE_NAME } from "./lib/auth.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TR_JSON = join(__dirname, "data", "tr.json");
@@ -33,6 +33,9 @@ const INACTIVE_DDWM_JSON = join(__dirname, "data", "inactive-ddwm.json");
 const INACTIVE_STATUS_JSON = join(__dirname, "data", "inactive-status.json");
 const DDWM_SALES_JSON = join(__dirname, "data", "ddwm-sales-2025.json");
 const PLAYBOOKS_JSON = join(__dirname, "data", "playbooks.json");
+const UPLOADS_DIR = join(__dirname, "data", "uploads"); // 꿀팁게시판 첨부 사진 저장
+const CS_INDEX_JSON = join(__dirname, "data", "cs-index.json"); // 상담 기록 검색 인덱스
+if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
 async function readJson(path) {
   try {
@@ -42,7 +45,7 @@ async function readJson(path) {
   }
 }
 
-const { NOTION_TOKEN, BFF_PORT = 8787 } = process.env;
+const { NOTION_TOKEN, BFF_PORT = 8787, APP_PASSWORD, SESSION_SECRET } = process.env;
 if (!NOTION_TOKEN) {
   console.error("환경변수 NOTION_TOKEN 이 필요합니다 (.env).");
   process.exit(1);
@@ -95,8 +98,102 @@ const SOURCES = [
 
 const notion = new Client({ auth: NOTION_TOKEN });
 const app = express();
-app.use(cors());
-app.use(express.json());
+// Caddy/Nginx 등 리버스 프록시 뒤에서 req.ip·x-forwarded-proto 를 신뢰
+app.set("trust proxy", true);
+
+// ───────── 접근제어(로그인) ─────────
+// 같은 출처(dev=Vite 프록시, prod=정적 서빙)에서만 호출되므로 CORS 는 닫는다.
+const auth = createAuth({ password: APP_PASSWORD, secret: SESSION_SECRET });
+if (!auth.enabled) {
+  console.warn(
+    "\n⚠️  APP_PASSWORD 미설정 → 로그인 비활성(누구나 접속 가능).\n" +
+      "    외부 서버로 오픈하기 전 .env 에 APP_PASSWORD 를 반드시 설정하세요.\n"
+  );
+} else if (auth.ephemeralSecret) {
+  console.warn(
+    "⚠️  SESSION_SECRET 미설정 → 임시 키 사용(서버 재시작 시 전원 재로그인). .env 에 고정 권장."
+  );
+}
+
+// 기본 보안 헤더(외부 의존성 없이 helmet 핵심만)
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("X-XSS-Protection", "0");
+  next();
+});
+
+// 블로그 검사기·꿀팁 첨부사진(base64)을 함께 보내므로 본문 한도를 넉넉히(기본 100kb→25mb)
+app.use(express.json({ limit: "25mb" }));
+
+// 로그인 무차별 대입 방지(IP당 15분 내 10회 실패 → 잠금)
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 10;
+const loginFails = new Map(); // ip -> { n, ts }
+function loginLocked(ip) {
+  const e = loginFails.get(ip);
+  if (!e || Date.now() - e.ts > LOGIN_WINDOW_MS) return false;
+  return e.n >= LOGIN_MAX_FAILS;
+}
+function noteLoginFail(ip) {
+  const now = Date.now();
+  const e = loginFails.get(ip);
+  if (!e || now - e.ts > LOGIN_WINDOW_MS) loginFails.set(ip, { n: 1, ts: now });
+  else e.n += 1;
+}
+
+const cookieSecure = (req) =>
+  req.secure || req.headers["x-forwarded-proto"] === "https";
+
+// 세션 상태(로그인 화면 분기용) — 인증 불필요
+app.get("/api/session", (req, res) => {
+  const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+  res.json({ authRequired: auth.enabled, authed: !auth.enabled || auth.verifyToken(token) });
+});
+
+app.post("/api/login", (req, res) => {
+  if (!auth.enabled) return res.json({ ok: true }); // 비활성 모드
+  const ip = req.ip || "?";
+  if (loginLocked(ip))
+    return res.status(429).json({ error: "too_many_attempts" });
+  if (!auth.checkPassword(req.body?.password)) {
+    noteLoginFail(ip);
+    return res.status(401).json({ error: "invalid_password" });
+  }
+  loginFails.delete(ip);
+  res.setHeader(
+    "Set-Cookie",
+    buildCookie(COOKIE_NAME, auth.issueToken(), {
+      maxAgeMs: auth.sessionMs,
+      secure: cookieSecure(req),
+    })
+  );
+  res.json({ ok: true });
+});
+
+app.post("/api/logout", (req, res) => {
+  res.setHeader(
+    "Set-Cookie",
+    buildCookie(COOKIE_NAME, "", { maxAgeMs: 0, secure: cookieSecure(req) })
+  );
+  res.json({ ok: true });
+});
+
+// 게이트: /api/* 는 로그인 필수(위 인증 엔드포인트·정적 SPA 제외)
+app.use((req, res, next) => {
+  if (!auth.enabled) return next();
+  const p = req.path;
+  if (!p.startsWith("/api")) return next(); // 정적 SPA(로그인 화면 포함)
+  if (p === "/api/session" || p === "/api/login" || p === "/api/logout")
+    return next();
+  if (auth.verifyToken(parseCookies(req.headers.cookie)[COOKIE_NAME]))
+    return next();
+  return res.status(401).json({ error: "unauthorized" });
+});
+
+// 업로드된 첨부 사진 서빙(로그인 게이트 뒤 → 인증된 사용자만)
+app.use("/api/uploads", express.static(UPLOADS_DIR));
 
 const CS_OVERRIDE_JSON = join(__dirname, "data", "cs-status-override.json");
 
@@ -806,55 +903,419 @@ async function claudeText(system, user, maxTokens = 6000) {
   return (j.content ?? []).map((b) => b.text || "").join("");
 }
 
-// 채널톡 최근 상담의 핵심 문의 텍스트 수집
-async function gatherIssues(limit = 50) {
-  const closed = await chListUserChats("closed", Date.now() - 30 * 24 * 3600 * 1000);
-  const issues = [];
-  for (const c of closed.slice(0, limit)) {
+// ===== 네이버 블로그 게시글 검사기 (Claude) =====
+const BLOG_MODELS = {
+  "claude-sonnet-4-6": { priceIn: 3, priceOut: 15 },
+  "claude-haiku-4-5": { priceIn: 1, priceOut: 5 },
+  "claude-opus-4-8": { priceIn: 5, priceOut: 25 },
+};
+const BLOG_DEFAULT_MODEL = "claude-sonnet-4-6";
+const BLOG_ALLOWED_IMG = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+const BLOG_SYSTEM = `당신은 네이버 블로그 검색 노출(SEO) 최적화 전문가입니다.
+사용자가 작성한 블로그 글(제목 + 본문)을 분석해서, 네이버 검색 결과에 더 잘 노출되도록
+무엇이 잘못됐고 어떻게 고쳐야 하는지 구체적으로 피드백하세요.
+
+평가 시 다음 네이버 블로그 노출 기준을 고려하세요:
+- 제목에 핵심 키워드가 자연스럽게 포함됐는가
+- 본문 글자 수가 충분한가 (보통 1,000자 이상 권장)
+- 핵심 키워드가 본문에 적절히 반복되는가 (너무 적어도, 너무 과해도(키워드 스터핑) 감점)
+- 소제목/문단 구조로 가독성이 좋은가
+- 도입부가 검색 의도에 빠르게 답하는가 (체류시간 유도)
+- 유사·중복 문서: 다른 블로그에서 그대로 복사한 문장이 있는가. 단, 소제목 활용·단락 구조·키워드 배치가 잘 된 글은 "뻔하다"고 평가하지 말 것. 문단 구조가 정돈되고 키워드가 자연스럽게 들어간 글은 오히려 SEO에 유리하므로 가점 요인으로 본다.
+- 이미지/동영상 활용: 이미지 관련 평가·제안은 "첨부 이미지가 있을 때만" 합니다. 첨부 이미지가 있으면 본문 주제와 잘 맞는지·직접 찍은 사진처럼 보이는지 보고, 배치 위치를 제안할 때는 반드시 첨부된 파일명으로 지칭하세요. 첨부 이미지가 없으면 이미지·사진에 대한 언급을 전혀 하지 마세요.
+- 해시태그/연관 키워드 활용
+
+점수 판정 기준 (overallScore):
+- 위 항목 중 대부분(5개 이상)이 충족되면 80점 이상을 부여하세요.
+- 제목 키워드 포함 + 1,000자 이상 + 소제목 구조 + 키워드 자연 배치 + 해시태그가 모두 갖춰진 글은 최소 85점 이상입니다.
+- "AI가 작성한 것 같다"거나 "표현이 매끄럽다"는 이유로 감점하지 마세요. SEO 기준으로만 판단하세요.
+
+피드백은 한국어로, 초보 블로거도 이해할 수 있게 친절하지만 솔직하게 작성하세요.
+실제로 고칠 수 있는 행동 중심의 조언을 주세요. 막연한 칭찬은 피하세요.
+이미 잘 최적화된 글에는 "이미 잘 작성된 글입니다"라고 인정하고, 남은 소소한 개선점만 짚어주세요.
+
+마지막으로, 위 피드백을 모두 반영한 "개선된 전체 글"을 작성하세요:
+- improvedTitle: 노출에 유리하게 다듬은 제목 (핵심 키워드 포함)
+- improvedBody: 그대로 복사해 네이버 블로그에 붙여넣을 수 있는 완성된 본문.
+  · 사용자가 쓴 실제 경험·사실은 유지하되, 지어내지 말 것 (없는 정보는 [여기에 OO 정보 추가] 처럼 빈칸으로 안내)
+  · 분량을 충분히 늘리고(가능하면 1,000자 이상), 소제목과 문단으로 구조화
+  · 핵심 키워드와 연관 키워드를 자연스럽게 배치 (키워드 스터핑 금지)
+  · 첨부 이미지가 있을 때만, 그 사진을 넣으면 좋은 위치를 본문 안에 (사진: 파일명) 형식으로 표시. 첨부 이미지가 없으면 본문에 사진 관련 표시를 넣지 말 것
+  · 글 끝에 어울리는 해시태그 5~10개 제안
+  · 반드시 순수 텍스트로만 작성할 것: 마크다운(**, *, #) 및 HTML 태그 절대 사용 금지. 소제목은 빈 줄 후 일반 텍스트로, 강조가 필요하면 ■ ▶ 【】 같은 특수문자 활용.
+
+반드시 아래 JSON 형식으로만 응답하세요. 코드 블록이나 설명 텍스트 없이 순수 JSON 객체만 출력하세요:
+{
+  "overallScore": <정수 0-100>,
+  "summary": "<노출 가능성 총평 2-3문장>",
+  "mainKeyword": "<이 글의 핵심 키워드>",
+  "titleFeedback": { "score": <정수 0-100>, "comment": "<제목 피드백>" },
+  "issues": [{ "severity": "high|medium|low", "location": "<위치>", "problem": "<문제>", "suggestion": "<개선안>" }],
+  "strengths": ["<잘한 점>"],
+  "rewrittenTitleSuggestions": ["<대안 제목>"],
+  "improvedTitle": "<개선 제목>",
+  "improvedBody": "<개선 본문>"
+}`;
+
+app.post("/api/blog-analyze", async (req, res) => {
+  try {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key)
+      return res.status(500).json({ error: "ANTHROPIC_API_KEY(.env)가 설정되지 않았습니다." });
+
+    const { title, body, model, kioskModel } = req.body ?? {};
+    const images = Array.isArray(req.body?.images) ? req.body.images : [];
+    if (!body || typeof body !== "string" || body.trim().length < 10)
+      return res.status(400).json({ error: "본문 내용을 10자 이상 입력해 주세요." });
+
+    const validImages = images
+      .filter(
+        (im) =>
+          im &&
+          BLOG_ALLOWED_IMG.includes(im.mediaType) &&
+          typeof im.data === "string" &&
+          im.data.length > 0
+      )
+      .slice(0, 6);
+
+    const modelId = BLOG_MODELS[model] ? model : BLOG_DEFAULT_MODEL;
+    const cfg = BLOG_MODELS[modelId];
+
+    let imageNote;
+    if (validImages.length > 0) {
+      const names = validImages.map((im, i) => im.name || `이미지${i + 1}`).join(", ");
+      imageNote = `\n\n[첨부 이미지] ${validImages.length}장: ${names}\n이미지 배치를 제안할 때는 반드시 위 파일명으로 지칭하세요. 첨부된 적 없는 이미지를 지어내지 마세요.`;
+    } else {
+      imageNote = `\n\n[첨부 이미지] 없음 — 이미지·사진에 대한 평가나 제안을 일절 하지 마세요.`;
+    }
+    const kioskNote = kioskModel
+      ? `\n\n[키오스크 모델명] ${kioskModel} — improvedBody에 이 모델명을 자연스럽게 포함하세요.`
+      : "";
+
+    const userContent = [
+      {
+        type: "text",
+        text: `다음 네이버 블로그 글을 분석해 주세요.${imageNote}${kioskNote}\n\n[제목]\n${
+          title || "(제목 없음)"
+        }\n\n[본문]\n${body}`,
+      },
+      ...validImages.map((im) => ({
+        type: "image",
+        source: { type: "base64", media_type: im.mediaType, data: im.data },
+      })),
+    ];
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 8192,
+        system: BLOG_SYSTEM,
+        messages: [{ role: "user", content: userContent }],
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j?.error?.message || `Claude API ${r.status}`);
+
+    let text = (j.content ?? []).map((b) => b.text || "").join("");
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const result = JSON.parse(text);
+    result.usedModel = modelId;
+
+    const inTok = j.usage?.input_tokens || 0;
+    const outTok = j.usage?.output_tokens || 0;
+    const usd = (inTok * cfg.priceIn + outTok * cfg.priceOut) / 1_000_000;
+    result.cost = {
+      inputTokens: inTok,
+      outputTokens: outTok,
+      usd,
+      krw: Math.round(usd * 1400),
+    };
+
+    res.json(result);
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (/quota|rate|429|overloaded/i.test(msg))
+      return res.status(429).json({ error: "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요." });
+    if (msg.includes("JSON"))
+      return res.status(502).json({ error: "분석 결과 형식이 올바르지 않습니다. 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
+// 사진 업로드 (base64 → 파일 저장 → URL 반환). 꿀팁게시판 첨부용.
+app.post("/api/upload", async (req, res) => {
+  try {
+    const { name, mediaType, data } = req.body ?? {};
+    if (!data || typeof data !== "string")
+      return res.status(400).json({ error: "파일 데이터가 없습니다." });
+    const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" };
+    const ext = EXT[mediaType];
+    if (!ext) return res.status(400).json({ error: "지원하지 않는 이미지 형식입니다(jpg/png/gif/webp)." });
+    const buf = Buffer.from(data, "base64");
+    if (buf.length > 10 * 1024 * 1024)
+      return res.status(413).json({ error: "사진은 10MB 이하만 가능합니다." });
+    const safe = String(name || "img")
+      .replace(/\.[^.]+$/, "") // 기존 확장자 제거(중복 방지)
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(-40) || "img";
+    const file = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}.${ext}`;
+    await writeFile(join(UPLOADS_DIR, file), buf);
+    res.json({ url: `/api/uploads/${file}` });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 채널톡 closed 상담의 '첫 문의 내용'을 표본으로 수집.
+// 태그를 거의 안 다는 환경이므로, 주제 분류는 태그가 아니라 AI가 '내용'을 읽고 직접 한다.
+async function gatherSamples({ days = 60, limit = 100 } = {}) {
+  const chats = await chListUserChats("closed", Date.now() - days * 24 * 3600 * 1000);
+  const samples = [];
+  for (const c of chats.slice(0, limit)) {
     try {
       const m = await chFetch(`/user-chats/${c.id}/messages`, { limit: 4, sortOrder: "asc" });
       const txt = (m.messages ?? []).map((x) => x.plainText).find((t) => t && t.trim());
       if (txt) {
-        issues.push({
-          medium: c.source?.medium?.mediumType === "phone" ? "전화" : "채팅",
-          tags: (c.tags ?? []).join(","),
-          text: txt.replace(/\s+/g, " ").slice(0, 240),
-        });
+        const tag = (c.tags ?? []).filter(Boolean).join(",");
+        samples.push((tag ? `[${tag}] ` : "") + txt.replace(/\s+/g, " ").slice(0, 200));
       }
     } catch {}
   }
-  return issues;
+  return { totalChats: chats.length, sampled: samples.length, days, samples };
 }
 
-app.post("/api/playbooks/generate", async (_req, res) => {
+app.post("/api/playbooks/generate", async (req, res) => {
   try {
-    const issues = await gatherIssues(50);
-    if (!issues.length) return res.status(400).json({ error: "상담 이력을 가져오지 못했습니다." });
+    const days = Math.min(180, Math.max(7, Number(req.body?.days) || 60));
+    const limit = Math.min(200, Math.max(20, Number(req.body?.limit) || 100));
+    const { totalChats, sampled, samples } = await gatherSamples({ days, limit });
+    if (!sampled) return res.status(400).json({ error: "상담 이력을 가져오지 못했습니다." });
 
+    const pbSchema =
+      '{"title":"문의 유형 제목","category":"분류(결제/단말기/가맹점/정산/기타)","rootId":"n1","nodes":{"n1":{"id":"n1","text":"질문 또는 확인사항","options":[{"label":"선택지 텍스트","next":"n2"}]},"n2":{"id":"n2","text":"해결책/안내 문구","answer":true}}}';
     const system =
-      "너는 고객상담(CS) 지식베이스 설계자다. 주어진 실제 상담 문의 목록을 보고, 상담원이 선택지를 단계별로 클릭하며 따라가다 '해결책'에 도달하는 의사결정 트리(플레이북)들을 한국어로 설계한다. 자주 나오는 문의 유형 3~6개를 골라 각각 하나의 플레이북으로 만든다. 각 플레이북은 root 질문에서 시작해 2~4단계 깊이로, 마지막은 answer(해결책) 노드로 끝난다. 반드시 아래 JSON 스키마의 배열만 출력하고, 코드펜스나 설명은 쓰지 마라.";
-    const schema =
-      '[{"title":"문의 유형 제목","category":"분류(결제/단말기/가맹점/정산/기타)","rootId":"n1","nodes":{"n1":{"id":"n1","text":"질문 또는 확인사항","options":[{"label":"선택지 텍스트","next":"n2"}]},"n2":{"id":"n2","text":"해결책/안내 문구","answer":true}}}]';
-    const user = `다음은 최근 상담 문의 ${issues.length}건이다(매체/태그/내용):\n${issues
-      .map((x, i) => `${i + 1}. [${x.medium}${x.tags ? "/" + x.tags : ""}] ${x.text}`)
-      .join("\n")}\n\n이 문의들을 유형별로 묶어 의사결정 트리 플레이북 배열(JSON)로 만들어줘. 스키마:\n${schema}`;
+      "너는 고객상담(CS) 지식베이스 설계자다. 상담원이 태그를 거의 달지 않으므로, 주어진 '실제 상담 문의 내용'을 직접 읽고 비슷한 내용끼리 주제로 묶어라. (1) 표본을 주제별로 분류해 각 주제의 건수를 세고, (2) 자주 반복되는 주제(상위 3~6개)에 대해, 상담원이 선택지를 단계별로 클릭하며 따라가 '해결책'에 도달하는 의사결정 트리(플레이북)를 한국어로 만든다. 1~2건짜리 일회성 주제는 제외한다. 각 플레이북은 root 질문에서 시작해 2~4단계 깊이로, 마지막은 answer(해결책) 노드로 끝낸다. 반드시 아래 JSON 객체만 출력하고 코드펜스·설명은 쓰지 마라.";
+    const user =
+      `다음은 최근 ${days}일 상담 중 ${sampled}건의 첫 문의 내용이다(대괄호 안은 태그가 있으면 참고용, 없으면 내용으로 직접 분류).\n` +
+      samples.map((s, i) => `${i + 1}. ${s}`).join("\n") +
+      `\n\n출력 스키마(JSON 객체):\n{"topics":[{"name":"주제명","count":건수}], "playbooks":[${pbSchema}]}`;
 
-    let txt = await claudeText(system, user);
+    let txt = await claudeText(system, user, 8000);
     txt = txt.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
-    const arr = JSON.parse(txt);
+    const parsed = JSON.parse(txt);
+    const arr = Array.isArray(parsed) ? parsed : parsed.playbooks ?? [];
+    const topics = Array.isArray(parsed?.topics) ? parsed.topics : [];
     const ts = Date.now();
-    const generated = (Array.isArray(arr) ? arr : []).map((p, i) => ({
-      ...p,
-      id: `ai-${ts}-${i}`,
-      ai: true,
-    }));
+    const generated = arr.map((p, i) => ({ ...p, id: `ai-${ts}-${i}`, ai: true }));
 
     const cur = (await readJson(PLAYBOOKS_JSON)) ?? PLAYBOOK_SEED;
     const next = { playbooks: [...generated, ...cur.playbooks] };
     await writeFile(PLAYBOOKS_JSON, JSON.stringify(next, null, 2));
-    res.json({ added: generated.length, data: next });
+    res.json({
+      added: generated.length,
+      data: next,
+      basis: {
+        days,
+        totalChats,
+        sampled,
+        topics: topics.map((t) => ({ tag: t.name, count: t.count })),
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ===== 상담 기록 검색 (인덱스 + AI 원포인트 답변) =====
+
+// 인덱스 메타 조회
+app.get("/api/cs-index", async (_req, res) => {
+  const idx = await readJson(CS_INDEX_JSON);
+  if (!idx) return res.json({ exists: false });
+  res.json({
+    exists: true,
+    lastBuilt: idx.lastBuilt,
+    from: idx.from ?? null, // 수집한 기간(시작)
+    to: idx.to ?? null, // 수집한 기간(끝)
+    count: idx.count,
+  });
+});
+
+// 인덱스 수집 — 지정 기간(from~to)의 closed 상담 대화를 모아 저장.
+// 중복 수집 방지: 이미 인덱스에 있는 상담(id)은 다시 가져오지 않고, 신규만 병합한다.
+app.post("/api/cs-index/refresh", async (req, res) => {
+  try {
+    // 기간 결정: from/to(YYYY-MM-DD) 우선, 없으면 days(기본 90일)
+    const toMs = req.body?.to ? Date.parse(`${req.body.to}T23:59:59`) : Date.now();
+    let fromMs;
+    if (req.body?.from) fromMs = Date.parse(`${req.body.from}T00:00:00`);
+    else {
+      const days = Math.min(365, Math.max(1, Number(req.body?.days) || 90));
+      fromMs = Date.now() - days * 24 * 3600 * 1000;
+    }
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs)
+      return res.status(400).json({ error: "기간이 올바르지 않습니다. 시작일·종료일을 확인하세요." });
+    const limit = Math.min(3000, Math.max(50, Number(req.body?.limit) || 1000));
+
+    // 기존 인덱스 로드 → 이미 모은 상담 id 집합(중복 수집 방지용)
+    const prev = await readJson(CS_INDEX_JSON);
+    const prevRecords = Array.isArray(prev?.records) ? prev.records : [];
+    const haveIds = new Set(prevRecords.map((r) => r.id));
+
+    // 기간 안([from,to])에 종료된 상담만, 그리고 아직 안 모은(신규) 것만
+    const chats = await chListUserChats("closed", fromMs);
+    const inRange = chats.filter((c) => {
+      const t = c.closedAt ?? c.updatedAt ?? c.createdAt ?? 0;
+      return t >= fromMs && t <= toMs;
+    });
+    const freshChats = inRange.filter((c) => !haveIds.has(c.id));
+    const skipped = inRange.length - freshChats.length; // 중복으로 건너뛴 수
+    const target = freshChats.slice(0, limit);
+    const truncated = freshChats.length - target.length; // 한도 초과로 못 모은 수
+
+    const added = [];
+    for (const c of target) {
+      try {
+        const m = await chFetch(`/user-chats/${c.id}/messages`, { limit: 30, sortOrder: "asc" });
+        const lines = (m.messages ?? [])
+          .filter((x) => x.plainText && x.plainText.trim())
+          .map((x) => {
+            const role =
+              x.personType === "manager" ? "상담원" : x.personType === "bot" ? "봇" : "고객";
+            return `${role}: ${x.plainText.replace(/\s+/g, " ").trim()}`;
+          });
+        if (!lines.length) continue;
+        const date = c.closedAt ?? c.updatedAt ?? c.createdAt ?? null;
+        added.push({
+          id: c.id,
+          date: date ? new Date(date).toISOString() : null,
+          tags: (c.tags ?? []).filter(Boolean),
+          name: c.name ?? null,
+          text: lines.join("\n").slice(0, 1200),
+          url: c.channelId
+            ? `https://desk.channel.io/#/channels/${c.channelId}/user_chats/${c.id}`
+            : null,
+        });
+      } catch {}
+    }
+
+    // 병합(신규 + 기존) → id 중복 제거 → 최신순 정렬
+    const seen = new Set();
+    const records = [...added, ...prevRecords].filter((r) =>
+      seen.has(r.id) ? false : seen.add(r.id)
+    );
+    records.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    // 수집 기간(누적): 이전에 모은 범위와 이번 범위를 합쳐 보관
+    const fromISO = new Date(fromMs).toISOString();
+    const toISO = new Date(toMs).toISOString();
+    const index = {
+      lastBuilt: new Date().toISOString(),
+      from: prev?.from && prev.from < fromISO ? prev.from : fromISO,
+      to: prev?.to && prev.to > toISO ? prev.to : toISO,
+      count: records.length,
+      records,
+    };
+    await writeFile(CS_INDEX_JSON, JSON.stringify(index));
+    res.json({
+      exists: true,
+      lastBuilt: index.lastBuilt,
+      from: index.from,
+      to: index.to,
+      count: records.length,
+      added: added.length, // 이번에 새로 모은 건수
+      skipped, // 이미 있어 건너뛴 건수(중복 방지)
+      inRange: inRange.length, // 기간 안 종료 상담 총수
+      truncated, // 한도 초과로 이번에 못 모은 신규 건수
+      range: { from: req.body?.from ?? fromISO.slice(0, 10), to: req.body?.to ?? toISO.slice(0, 10) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 검색 — 인덱스에서 키워드로 후보를 추리고 Claude가 원포인트 답변을 정리
+app.post("/api/cs-search", async (req, res) => {
+  try {
+    const query = String(req.body?.query ?? "").trim();
+    if (query.length < 2) return res.status(400).json({ error: "검색어를 2자 이상 입력하세요." });
+    const idx = await readJson(CS_INDEX_JSON);
+    if (!idx || !idx.records?.length)
+      return res
+        .status(400)
+        .json({ error: "상담 인덱스가 없습니다. 먼저 '인덱스 새로고침'으로 상담 기록을 모아주세요." });
+
+    // 한국어 조사·띄어쓰기에 강하도록 '글자 2-gram' 겹침으로 점수화
+    const norm = (s) => (s || "").toLowerCase();
+    const grams = (s) => {
+      const t = norm(s).replace(/\s+/g, "");
+      const g = new Set();
+      for (let i = 0; i < t.length - 1; i++) g.add(t.slice(i, i + 2));
+      return [...g];
+    };
+    const qg = grams(query);
+    const qtok = query.split(/\s+/).map(norm).filter((t) => t.length >= 2);
+    const scored = idx.records
+      .map((r) => {
+        const hay = norm(r.text + " " + (r.tags || []).join(" "));
+        let score = 0;
+        for (const g of qg) if (hay.includes(g)) score += 1; // 글자 2-gram 겹침
+        for (const t of qtok) if (hay.includes(t)) score += 2; // 단어 일치 가점
+        return { r, score };
+      })
+      .filter((x) => x.score >= 2) // 최소 2-gram 2개 이상 겹쳐야 후보
+      .sort((a, b) => b.score - a.score);
+
+    const top = scored.slice(0, 20).map((x) => x.r);
+    if (!top.length)
+      return res.json({
+        query,
+        answer: "",
+        confidence: "none",
+        sources: [],
+        note: "관련 상담 기록을 찾지 못했습니다. 다른 검색어로 시도해 보세요.",
+      });
+
+    const system =
+      "너는 CS 상담 보조다. 사용자의 질문과 '과거 실제 상담 기록'을 받아, 상담원이 바로 쓸 수 있는 '원포인트 답변'을 한국어로 정리한다. 기록에서 실제로 어떻게 해결됐는지 패턴을 찾아 핵심 해결책을 제시하되, 기록에 근거가 부족하면 솔직히 말하고 지어내지 마라. 반드시 아래 JSON 객체만 출력하고 코드펜스·설명은 쓰지 마라.";
+    const user =
+      `질문: ${query}\n\n관련 과거 상담 기록 ${top.length}건:\n` +
+      top
+        .map(
+          (r, i) =>
+            `[${i + 1}] (${r.date ? r.date.slice(0, 10) : ""}${
+              r.tags?.length ? " / " + r.tags.join(",") : ""
+            })\n${r.text}`
+        )
+        .join("\n\n") +
+      `\n\n위 기록을 근거로 원포인트 답변을 정리하라. 출력 JSON:\n{"answer":"핵심 해결책(2~5줄, 줄바꿈은 \\n)","steps":["확인/조치 단계(선택)"],"confidence":"high|medium|low","usedSources":[참고한 기록 번호]}`;
+
+    let txt = await claudeText(system, user, 2000);
+    txt = txt.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+    let ai;
+    try {
+      ai = JSON.parse(txt);
+    } catch {
+      ai = { answer: txt, steps: [], confidence: "low", usedSources: [] };
+    }
+    const used = new Set((ai.usedSources || []).map((n) => Number(n)));
+    const sources = top.map((r, i) => ({ ...r, used: used.has(i + 1) }));
+    res.json({
+      query,
+      answer: ai.answer || "",
+      steps: Array.isArray(ai.steps) ? ai.steps : [],
+      confidence: ai.confidence || "medium",
+      sources,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
   }
 });
 

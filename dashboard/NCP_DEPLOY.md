@@ -13,9 +13,12 @@
 [사용자 브라우저] ──HTTPS──> [도메인 erp.daininc.kr]
                                   │
                          [NCP 서버(Ubuntu)]
-                           ├─ Caddy : HTTPS 자동발급 + 로그인(접근제어) + 8787로 전달
-                           ├─ Node(PM2) : ERP 서버(화면+API) :8787
+                           ├─ Caddy : HTTPS 자동발급 + 8787로 전달
+                           ├─ Node(PM2) : ERP 서버(화면+API+로그인) :8787
                            └─ cron : 매일 08:00 수집(daily-collect)
+
+  ※ 로그인(접근제어)은 앱에 내장됨 — .env 의 APP_PASSWORD 로 동작.
+    (로그인 화면 → 세션 쿠키 → /api/* 보호. Caddy 는 HTTPS·전달만 담당.)
 ```
 
 ---
@@ -77,6 +80,10 @@ npx playwright install --with-deps chromium
 # 4) 비밀키 입력 (운영용으로 재발급한 새 키!)
 cp .env.example .env
 nano .env        # 모든 키 채우기 → Ctrl+O 저장, Ctrl+X 종료
+#   ⚠️ 외부 오픈이므로 반드시 채울 것:
+#     APP_PASSWORD   = 대시보드 접속 비밀번호(전 직원 공용)
+#     SESSION_SECRET = 아무 긴 무작위 문자열. 아래로 생성해 붙여넣기:
+#       node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 # 5) 화면 빌드
 npm run build
@@ -94,8 +101,8 @@ crontab -e
 
 이 시점에서 서버 내부 `http://localhost:8787` 로 화면+API가 동작합니다(아직 외부 도메인/HTTPS 전).
 
-## 7. 도메인 연결 + HTTPS + 로그인 (Caddy)
-> Caddy = HTTPS 자동발급 + 리버스프록시 + 간단 로그인을 한 번에.
+## 7. 도메인 연결 + HTTPS (Caddy)
+> Caddy = HTTPS 자동발급 + 리버스프록시. **로그인은 앱에 내장**(6단계 `APP_PASSWORD`)되어 있어 Caddy 설정은 두 줄로 끝납니다.
 
 1. 도메인 준비: 가비아 등에서 도메인 구입 → DNS A레코드 `erp.daininc.kr → 공인IP`
 2. Caddy 설치:
@@ -105,24 +112,19 @@ crontab -e
    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
    apt update && apt install -y caddy
    ```
-3. 로그인 비밀번호 해시 생성:
-   ```bash
-   caddy hash-password    # 원하는 비밀번호 입력 → 해시 출력(복사)
-   ```
-4. `/etc/caddy/Caddyfile` 작성(`nano /etc/caddy/Caddyfile`):
+3. `/etc/caddy/Caddyfile` 작성(`nano /etc/caddy/Caddyfile`):
    ```
    erp.daininc.kr {
-       basic_auth {
-           dain   <위에서_복사한_해시>
-       }
        reverse_proxy localhost:8787
    }
    ```
-5. 적용: `systemctl reload caddy`
-6. 브라우저에서 **https://erp.daininc.kr** → 아이디 `dain` + 비밀번호로 로그인 → 대시보드 ✅
+4. 적용: `systemctl reload caddy`
+5. 브라우저에서 **https://erp.daininc.kr** → **로그인 화면**에 `APP_PASSWORD` 입력 → 대시보드 ✅
    - HTTPS 인증서는 Caddy가 자동 발급/갱신합니다.
+   - 로그인하면 7일간 세션이 유지되고, 우측 상단 **로그아웃** 버튼으로 종료할 수 있습니다.
 
 > 이렇게 하면 **인터넷에 열려도 로그인 없이는 못 봅니다.** (master.md의 접근제어 요건 충족)
+> Caddy `basic_auth` 대신 앱 로그인을 쓰는 이유: 로그아웃·세션 만료·로그인 화면 UX가 앱 안에서 일관되게 동작하고, 호스팅(Caddy/Nginx/직접서빙) 방식과 무관하게 보호되기 때문입니다.
 
 ## 8. 업데이트(코드 바꿀 때마다)
 ```bash
