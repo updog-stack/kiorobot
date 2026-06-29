@@ -22,6 +22,7 @@ server/data/*.json
 server/data/*.png
 server/data/_*
 server/data/uploads/
+server/data/worklogs/
 
 # Editor directories and files
 .vscode/*

@@ -6,6 +6,9 @@
 # 자체 .git·node_modules·.env.local(비밀키)을 포함하므로 메인 저장소에서 제외.
 daininc-naver-blog/
 
+# SSH 인증키(서버 .pem) — 절대 커밋 금지(공개 저장소 유출 방지)
+*.pem
+
 # OS / 에디터
 .DS_Store
 Thumbs.db

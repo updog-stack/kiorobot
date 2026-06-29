@@ -3,7 +3,8 @@ import { Sidebar, type NavItem } from "./components/Sidebar";
 import { Header, type Role } from "./components/Header";
 import { Login } from "./components/Login";
 import { getSession, logout } from "./lib/auth";
-import { Card } from "./components/Card";
+import { TaskStatusView } from "./components/TaskStatus";
+import { WorkLog } from "./components/WorkLog";
 import { Overview } from "./components/Overview";
 import { Schedule } from "./components/Schedule";
 import { ManagementMetrics } from "./components/ManagementMetrics";
@@ -21,7 +22,8 @@ const NAV: NavItem[] = [
   { key: "blog", label: "블로그 검사기", icon: "📝" },
   { key: "playbooks", label: "꿀팁게시판", icon: "💡" },
   { key: "schedule", label: "일정", icon: "📅" },
-  { key: "tasks", label: "업무 / 할 일", icon: "✅" },
+  { key: "tasks", label: "업무현황", icon: "✅" },
+  { key: "worklog", label: "업무일지", icon: "📝" },
   { key: "metrics", label: "경영 지표", icon: "📈" },
   { key: "tr", label: "거래(TR) 현황", icon: "💳" },
   { key: "inactive", label: "무실적 가맹점", icon: "🏪" },
@@ -105,11 +107,15 @@ function App() {
           )}
 
           {active === "tasks" && (
-            <Card
-              title="업무 / 할 일"
-              description="노션 업무 DB. 프로젝트별 진행 상태(todo · doing · done)."
-              wide
-            />
+            <div className="full">
+              <TaskStatusView />
+            </div>
+          )}
+
+          {active === "worklog" && (
+            <div className="full">
+              <WorkLog />
+            </div>
           )}
 
           {active === "metrics" && (

@@ -15,7 +15,7 @@
 //   4) src/lib/sales.ts 의 USE_MOCK = false
 
 import "dotenv/config";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, readdir } from "node:fs/promises";
 import { existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -24,6 +24,7 @@ import { createSign } from "node:crypto";
 import express from "express";
 import { Client } from "@notionhq/client";
 import { createAuth, parseCookies, buildCookie, COOKIE_NAME } from "./lib/auth.mjs";
+import { buildWorklogData, generateAiComment, worklogToText } from "./lib/worklog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TR_JSON = join(__dirname, "data", "tr.json");
@@ -35,7 +36,9 @@ const DDWM_SALES_JSON = join(__dirname, "data", "ddwm-sales-2025.json");
 const PLAYBOOKS_JSON = join(__dirname, "data", "playbooks.json");
 const UPLOADS_DIR = join(__dirname, "data", "uploads"); // 꿀팁게시판 첨부 사진 저장
 const CS_INDEX_JSON = join(__dirname, "data", "cs-index.json"); // 상담 기록 검색 인덱스
+const WORKLOGS_DIR = join(__dirname, "data", "worklogs"); // 매일 18:00 자동 업무일지
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!existsSync(WORKLOGS_DIR)) mkdirSync(WORKLOGS_DIR, { recursive: true });
 
 async function readJson(path) {
   try {
@@ -1319,6 +1322,220 @@ app.post("/api/cs-search", async (req, res) => {
   }
 });
 
+// ===== 업무현황 (노션 [업무 DB]) =====
+// "업무현황" 페이지 내부 [업무 DB] 데이터소스. (환경변수 NOTION_TASKS_DS_ID 로 덮어쓰기 가능)
+const TASKS_DS_ID =
+  process.env.NOTION_TASKS_DS_ID || "26ea252e-5579-8384-b9ea-87b2b38f38a3";
+
+// 노션 속성 → 평탄한 TaskRecord 로 정규화해서 프론트로 내려준다.
+const plain = (arr) => (arr ?? []).map((t) => t.plain_text).join("");
+function taskValue(prop) {
+  if (!prop) return null;
+  switch (prop.type) {
+    case "title":
+      return plain(prop.title);
+    case "rich_text":
+      return plain(prop.rich_text);
+    case "status":
+      return prop.status?.name ?? null;
+    case "select":
+      return prop.select?.name ?? null;
+    case "multi_select":
+      return prop.multi_select.map((o) => o.name);
+    case "date":
+      return prop.date?.start ?? null;
+    case "created_time":
+      return prop.created_time ?? null;
+    case "last_edited_time":
+      return prop.last_edited_time ?? null;
+    case "formula":
+      return prop.formula?.[prop.formula?.type] ?? null;
+    case "rollup": {
+      const a = prop.rollup?.array ?? [];
+      const names = a
+        .map((x) => (x.type === "select" ? x.select?.name : x.type === "title" ? plain(x.title) : null))
+        .filter(Boolean);
+      return names;
+    }
+    default:
+      return null;
+  }
+}
+
+function normalizeTask(page) {
+  const p = page.properties ?? {};
+  const v = (name) => taskValue(p[name]);
+  const roles = v("담당자직책") || [];
+  const trashFlag = v("휴지통");
+  const staleFlag = v("정체플래그");
+  return {
+    id: page.id,
+    url: page.url,
+    name: v("업무명") || "(제목 없음)",
+    status: v("상태") || "업무대기",
+    assignee: v("담당자T") || (v("담당자명") || [])[0] || "미지정",
+    role: roles[0] || null,
+    priority: v("우선순위") || null,
+    depts: v("연관부서") || [],
+    content: v("업무내용") || "",
+    taskDate: v("업무일자"),
+    startDate: v("진행시작일"),
+    doneDate: v("완료일"),
+    lastStatusChange: v("마지막상태변경일"),
+    lastEdited: v("마지막변경시각"),
+    created: v("생성일"),
+    stale: typeof staleFlag === "string" ? staleFlag.trim() !== "" : Boolean(staleFlag),
+    trash: typeof trashFlag === "string" ? trashFlag.trim() !== "" : Boolean(trashFlag),
+  };
+}
+
+async function loadTasks() {
+  const tasks = [];
+  let cursor;
+  do {
+    const res = await notion.dataSources.query({
+      data_source_id: TASKS_DS_ID,
+      start_cursor: cursor,
+      page_size: 100,
+    });
+    for (const page of res.results) {
+      const t = normalizeTask(page);
+      if (t.trash || t.status === "휴지통") continue; // 휴지통 제외
+      tasks.push(t);
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  console.log(`  · 업무 DB: ${tasks.length}건`);
+  return tasks;
+}
+
+let tasksCache = { at: 0, data: null };
+app.get("/api/tasks", async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (!tasksCache.data || now - tasksCache.at > TTL_MS) {
+      console.log("노션 업무 조회…");
+      tasksCache = { at: now, data: await loadTasks() };
+    }
+    res.json({ updatedAt: new Date(tasksCache.at).toISOString(), tasks: tasksCache.data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// ===== 업무일지 (매일 18:00 자동 생성 + 수동) =====
+const WORKLOG_HOUR = 18; // 오후 6시
+
+function localDateIso(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+const worklogPath = (date) => join(WORKLOGS_DIR, `${date}.json`);
+
+let worklogGenerating = false;
+// 하루치 업무일지 생성 → 저장 → 반환. (auto: 스케줄러 자동생성 여부)
+async function generateWorklog({ auto = false } = {}) {
+  if (worklogGenerating) return null;
+  worklogGenerating = true;
+  try {
+    const date = localDateIso();
+    const tasks = await loadTasks();
+    const data = buildWorklogData(tasks, date);
+    const aiComment = await generateAiComment(data, process.env.ANTHROPIC_API_KEY);
+    const report = {
+      ...data,
+      aiComment,
+      text: worklogToText(data),
+      auto,
+      generatedAt: new Date().toISOString(),
+    };
+    await writeFile(worklogPath(date), JSON.stringify(report, null, 2));
+    console.log(`📝 업무일지 생성: ${date} (${auto ? "자동" : "수동"}) — 완료 ${data.summary.doneToday}건`);
+    return report;
+  } finally {
+    worklogGenerating = false;
+  }
+}
+
+// 저장된 일지 날짜 목록(최신순)
+async function listWorklogDates() {
+  try {
+    const files = await readdir(WORKLOGS_DIR);
+    return files
+      .filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+      .map((f) => f.slice(0, 10))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+// 특정 날짜(기본: 최신) 일지 조회
+app.get("/api/worklog", async (req, res) => {
+  try {
+    const dates = await listWorklogDates();
+    const date = req.query.date ? String(req.query.date) : dates[0];
+    if (!date) return res.json({ exists: false, dates: [] });
+    const path = worklogPath(date);
+    if (!existsSync(path)) return res.json({ exists: false, date, dates });
+    const report = JSON.parse(await readFile(path, "utf8"));
+    res.json({ exists: true, dates, report });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 수동 생성(오늘) — "지금 생성" 버튼
+app.post("/api/worklog/generate", async (_req, res) => {
+  if (worklogGenerating)
+    return res.status(409).json({ error: "이미 생성 중입니다. 잠시 후 다시 시도하세요." });
+  try {
+    const report = await generateWorklog({ auto: false });
+    const dates = await listWorklogDates();
+    res.json({ exists: true, dates, report });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 매일 18:00 자동 생성 스케줄러(BFF 가동 중일 때) + 가동 시 당일 누락분 보완
+function msUntilNextWorklog() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(WORKLOG_HOUR, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  return next - now;
+}
+function scheduleDailyWorklog() {
+  const wait = msUntilNextWorklog();
+  console.log(`⏰ 다음 업무일지 자동생성까지 ${Math.round(wait / 60000)}분 (매일 ${WORKLOG_HOUR}:00)`);
+  setTimeout(async () => {
+    try {
+      await generateWorklog({ auto: true });
+    } catch (e) {
+      console.error("업무일지 자동생성 실패:", String(e?.message ?? e));
+    }
+    scheduleDailyWorklog(); // 다음 날 예약
+  }, wait);
+}
+async function catchUpWorklog() {
+  // 이미 18시가 지났는데 오늘 일지가 없으면(예: PC가 18시에 꺼져 있었음) 보완 생성
+  const now = new Date();
+  if (now.getHours() < WORKLOG_HOUR) return;
+  const date = localDateIso(now);
+  if (existsSync(worklogPath(date))) return;
+  try {
+    console.log("🔁 오늘(18시 이후) 업무일지 누락 감지 → 보완 생성");
+    await generateWorklog({ auto: true });
+  } catch (e) {
+    console.error("업무일지 보완 생성 실패:", String(e?.message ?? e));
+  }
+}
+
 // ===== 구글캘린더 일정 (읽기 전용) =====
 // 서비스 계정 JWT → OAuth 토큰 발급 → Calendar v3 events 조회. (googleapis 의존성 없이 내장 crypto 사용)
 const b64url = (input) =>
@@ -1664,4 +1881,7 @@ app.listen(Number(BFF_PORT), () => {
   console.log(
     `BFF 실행 중: http://localhost:${BFF_PORT}  (/api/* + dist 정적 서빙${existsSync(distDir) ? " ON" : " OFF(빌드 전)"})`
   );
+  // 업무일지: 매일 18:00 자동 생성 예약 + 가동 시 당일 누락분 보완
+  scheduleDailyWorklog();
+  catchUpWorklog();
 });
