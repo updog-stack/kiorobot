@@ -1442,6 +1442,17 @@ async function generateWorklog({ auto = false } = {}) {
   worklogGenerating = true;
   try {
     const date = localDateIso();
+    // 직원이 직접 쓴 자유기입(note)은 재생성 시에도 보존한다.
+    let note = "";
+    let noteUpdatedAt = null;
+    const prevPath = worklogPath(date);
+    if (existsSync(prevPath)) {
+      try {
+        const prev = JSON.parse(await readFile(prevPath, "utf8"));
+        note = prev.note || "";
+        noteUpdatedAt = prev.noteUpdatedAt || null;
+      } catch {}
+    }
     const tasks = await loadTasks();
     const data = buildWorklogData(tasks, date);
     const aiComment = await generateAiComment(data, process.env.ANTHROPIC_API_KEY);
@@ -1450,6 +1461,8 @@ async function generateWorklog({ auto = false } = {}) {
       aiComment,
       text: worklogToText(data),
       auto,
+      note,
+      noteUpdatedAt,
       generatedAt: new Date().toISOString(),
     };
     await writeFile(worklogPath(date), JSON.stringify(report, null, 2));
@@ -1495,6 +1508,47 @@ app.post("/api/worklog/generate", async (_req, res) => {
     return res.status(409).json({ error: "이미 생성 중입니다. 잠시 후 다시 시도하세요." });
   try {
     const report = await generateWorklog({ auto: false });
+    const dates = await listWorklogDates();
+    res.json({ exists: true, dates, report });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 빈(집계 없는) 일지 — 직원이 임의 날짜에 직접 작성할 때의 기본 골격
+function emptyWorklogReport(date) {
+  return {
+    date,
+    summary: { total: 0, doneToday: 0, inProgress: 0, onHold: 0, waiting: 0, stale: 0 },
+    assignees: [],
+    aiComment: null,
+    text: "",
+    auto: false,
+    note: "",
+    noteUpdatedAt: null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// 자유기입 저장 — 직원이 언제든 임의 날짜의 업무일지/업무일정을 직접 작성.
+// 해당 날짜의 자동집계 일지가 있으면 note만 갱신하고, 없으면 새로 만든다.
+app.post("/api/worklog/note", async (req, res) => {
+  try {
+    const date = req.body?.date ? String(req.body.date) : localDateIso();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: "날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)." });
+    const note = typeof req.body?.note === "string" ? req.body.note : "";
+    const path = worklogPath(date);
+    let report;
+    if (existsSync(path)) {
+      report = JSON.parse(await readFile(path, "utf8"));
+    } else {
+      report = emptyWorklogReport(date);
+    }
+    report.note = note;
+    report.noteUpdatedAt = new Date().toISOString();
+    await writeFile(path, JSON.stringify(report, null, 2));
+    console.log(`✍️  업무일지 직접 작성 저장: ${date} (${note.length}자)`);
     const dates = await listWorklogDates();
     res.json({ exists: true, dates, report });
   } catch (e) {

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import {
   fetchWorklog,
   generateWorklog,
+  saveWorklogNote,
+  todayIso,
   type WorklogAssignee,
   type WorklogReport,
   type WorklogTaskLite,
@@ -15,16 +17,32 @@ export function WorkLog() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  // 직원 자유기입(직접 작성)
+  const [note, setNote] = useState("");
+  const [savedNote, setSavedNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  function applyResponse(r: {
+    dates: string[];
+    report?: WorklogReport | null;
+    date?: string;
+    exists?: boolean;
+  }) {
+    setDates(r.dates);
+    setSelected(r.report?.date ?? r.date ?? null);
+    setReport(r.report ?? null);
+    setMissing(!r.exists);
+    setNote(r.report?.note ?? "");
+    setSavedNote(r.report?.note ?? "");
+    setSavedAt(r.report?.noteUpdatedAt ?? null);
+    setError(null);
+  }
 
   async function load(date?: string) {
     setLoading(true);
     try {
-      const r = await fetchWorklog(date);
-      setDates(r.dates);
-      setSelected(r.report?.date ?? r.date ?? null);
-      setReport(r.report ?? null);
-      setMissing(!r.exists);
-      setError(null);
+      applyResponse(await fetchWorklog(date));
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -39,18 +57,28 @@ export function WorkLog() {
   async function handleGenerate() {
     setGenerating(true);
     try {
-      const r = await generateWorklog();
-      setDates(r.dates);
-      setSelected(r.report?.date ?? null);
-      setReport(r.report ?? null);
-      setMissing(false);
-      setError(null);
+      applyResponse(await generateWorklog());
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setGenerating(false);
     }
   }
+
+  async function handleSaveNote() {
+    const date = selected ?? todayIso();
+    setSaving(true);
+    try {
+      applyResponse(await saveWorklogNote(date, note));
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const activeDate = selected ?? todayIso();
+  const noteDirty = note !== savedNote;
 
   if (loading && !report) return <div className="state">업무일지를 불러오는 중…</div>;
 
@@ -72,6 +100,14 @@ export function WorkLog() {
           ) : (
             <span className="sales__updated">아직 생성된 일지가 없습니다.</span>
           )}
+          <input
+            type="date"
+            className="agent__select"
+            style={{ width: "auto" }}
+            value={activeDate}
+            onChange={(e) => e.target.value && load(e.target.value)}
+            title="다른 날짜의 업무일지를 열거나 새로 작성"
+          />
           {report && (
             <span className="sales__updated">
               {report.auto ? "자동(18:00)" : "수동"} · {new Date(report.generatedAt).toLocaleString("ko-KR")} 생성
@@ -84,8 +120,44 @@ export function WorkLog() {
       </div>
 
       <div className="state" style={{ fontSize: 13 }}>
-        매일 <b>오후 6시</b>에 자동으로 그날의 업무일지가 생성됩니다. (BFF 서버가 켜져 있어야 하며, 6시에 꺼져 있었으면 다음 구동 시 보완 생성됩니다)
+        업무일지는 <b>언제든 직접 작성·저장</b>할 수 있습니다. 위 날짜를 바꾸면 지난 날짜를 열거나 새 날짜(예: 내일 업무일정)를 만들 수 있어요.
+        매일 <b>오후 6시</b>에는 노션 업무 기준 자동 요약도 함께 만들어집니다. (직접 작성한 내용은 자동 요약이 갱신돼도 그대로 보존됩니다)
       </div>
+
+      {/* 직원 자유기입 — 언제든 직접 작성 */}
+      <section className="card card--wide">
+        <h2 className="card__title">
+          ✍️ 직접 작성 · <span style={{ fontWeight: 400 }}>{activeDate}</span>
+        </h2>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder={"오늘 한 일, 진행 상황, 내일/이후 업무일정 등을 자유롭게 기재하세요.\n예)\n- 오전: A거래처 견적 발송\n- 오후: B프로젝트 회의, 자료 정리\n- 내일: C 납품 준비"}
+          rows={10}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            resize: "vertical",
+            padding: "12px 14px",
+            fontSize: 14,
+            lineHeight: 1.7,
+            fontFamily: "inherit",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            background: "var(--bg)",
+            color: "var(--text)",
+          }}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
+          <button className="sync-btn" onClick={handleSaveNote} disabled={saving || !noteDirty}>
+            {saving ? "저장 중…" : noteDirty ? "💾 저장" : "저장됨"}
+          </button>
+          {noteDirty && !saving && <span className="sales__updated">저장되지 않은 변경사항이 있습니다.</span>}
+          {!noteDirty && savedAt && (
+            <span className="sales__updated">마지막 저장 {new Date(savedAt).toLocaleString("ko-KR")}</span>
+          )}
+        </div>
+      </section>
 
       {error && <div className="state state--error">{error}</div>}
 

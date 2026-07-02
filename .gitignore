@@ -9,6 +9,9 @@ daininc-naver-blog/
 # SSH 인증키(서버 .pem) — 절대 커밋 금지(공개 저장소 유출 방지)
 *.pem
 
+# Claude Code 로컬 설정/세션(사용자별·로컬 전용 → 커밋 제외)
+.claude/
+
 # OS / 에디터
 .DS_Store
 Thumbs.db

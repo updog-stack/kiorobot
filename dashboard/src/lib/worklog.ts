@@ -32,6 +32,10 @@ export interface WorklogReport {
   aiComment: string | null;
   text: string;
   auto: boolean;
+  /** 직원이 자유롭게 직접 작성한 업무일지/업무일정 본문 */
+  note?: string;
+  /** 자유기입 마지막 저장 시각(ISO) */
+  noteUpdatedAt?: string | null;
   generatedAt: string;
 }
 
@@ -56,4 +60,26 @@ export async function generateWorklog(): Promise<WorklogResponse> {
     throw new Error(j.error || `업무일지 생성 실패: ${res.status}`);
   }
   return (await res.json()) as WorklogResponse;
+}
+
+/** 직원이 직접 작성한 업무일지/업무일정 본문을 저장(임의 날짜 가능). */
+export async function saveWorklogNote(date: string, note: string): Promise<WorklogResponse> {
+  const res = await fetch("/api/worklog/note", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ date, note }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || `업무일지 저장 실패: ${res.status}`);
+  }
+  return (await res.json()) as WorklogResponse;
+}
+
+/** 로컬 기준 오늘 날짜(YYYY-MM-DD). */
+export function todayIso(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
 }
