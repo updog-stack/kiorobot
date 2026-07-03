@@ -9,6 +9,7 @@ import { Overview } from "./components/Overview";
 import { Schedule } from "./components/Schedule";
 import { ManagementMetrics } from "./components/ManagementMetrics";
 import { BlogChecker } from "./components/BlogChecker";
+import { PromptGen } from "./components/PromptGen";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
 import { CsStatus } from "./components/CsStatus";
@@ -20,6 +21,7 @@ const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
   { key: "cs", label: "CS 현황", icon: "💬" },
   { key: "blog", label: "블로그 검사기", icon: "📝" },
+  { key: "promptgen", label: "프롬프트 생성기", icon: "🪄" },
   { key: "playbooks", label: "꿀팁게시판", icon: "💡" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "tasks", label: "업무현황", icon: "✅" },
@@ -95,6 +97,12 @@ function App() {
           {active === "blog" && (
             <div className="full">
               <BlogChecker />
+            </div>
+          )}
+
+          {active === "promptgen" && (
+            <div className="full">
+              <PromptGen />
             </div>
           )}
 
