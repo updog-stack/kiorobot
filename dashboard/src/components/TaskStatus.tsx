@@ -1,312 +1,336 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   fetchTasks,
-  isDoneToday,
-  STATUS_ORDER,
+  getStaffLocations,
+  setStaffLocation,
+  busyLevel,
   type TaskRecord,
-  type TaskStatus,
+  type StaffLocations,
+  type WorkLocation,
 } from "../lib/tasks";
 
-const REFRESH_MS = 5 * 60 * 1000; // 5분 자동 갱신
-
-const STATUS_STYLE: Record<string, { fg: string; bg: string }> = {
+const REFRESH_MS = 5 * 60 * 1000;
+const PALETTE = ["#3a45d1", "#0f766e", "#b7823a", "#7c3aad", "#c2410c", "#0369a1", "#be123c", "#4d7c0f"];
+const STATUS_CLASS: Record<string, { fg: string; bg: string }> = {
   진행중: { fg: "#1d4ed8", bg: "#dbeafe" },
   업무대기: { fg: "#475569", bg: "#e2e8f0" },
   보류중: { fg: "#b45309", bg: "#fef3c7" },
   처리완료: { fg: "#047857", bg: "#d1fae5" },
 };
-const PRIORITY_STYLE: Record<string, { fg: string; bg: string }> = {
-  높음: { fg: "#b91c1c", bg: "#fee2e2" },
-  중간: { fg: "#b45309", bg: "#fef3c7" },
-  낮음: { fg: "#475569", bg: "#e2e8f0" },
-};
+const initial = (name: string) => (name[0] === "김" ? name[1] || name[0] : name[0]);
 
-function Badge({ text, style }: { text: string; style?: { fg: string; bg: string } }) {
-  const s = style ?? { fg: "#475569", bg: "#e2e8f0" };
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        fontSize: 12,
-        fontWeight: 700,
-        padding: "2px 8px",
-        borderRadius: 999,
-        color: s.fg,
-        background: s.bg,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {text}
-    </span>
-  );
+interface Person {
+  name: string;
+  role: string | null;
+  color: string;
+  owned: number;
+  collab: number;
+  requested: number;
+  activeOwned: number;
+  stale: number;
 }
 
 export function TaskStatusView() {
   const [tasks, setTasks] = useState<TaskRecord[] | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [loc, setLoc] = useState<StaffLocations>({});
+  const [selected, setSelected] = useState<string | null>(null);
+  const [openTask, setOpenTask] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<TaskStatus | "정체" | "전체">("전체");
-  const [assignee, setAssignee] = useState<string>("전체");
-  const [query, setQuery] = useState("");
-  const timer = useRef<number | null>(null);
 
   async function load(silent = false) {
-    if (!silent) setLoading(true);
     try {
-      const d = await fetchTasks();
+      const [d, l] = await Promise.all([fetchTasks(), getStaffLocations().catch(() => ({}))]);
       setTasks(d.tasks);
-      setUpdatedAt(d.updatedAt);
+      setLoc(l as StaffLocations);
       setError(null);
     } catch (e) {
       if (!silent) setError(String(e instanceof Error ? e.message : e));
-    } finally {
-      if (!silent) setLoading(false);
     }
   }
-
   useEffect(() => {
     load();
-    timer.current = window.setInterval(() => load(true), REFRESH_MS);
-    return () => {
-      if (timer.current) window.clearInterval(timer.current);
-    };
+    const t = window.setInterval(() => load(true), REFRESH_MS);
+    return () => window.clearInterval(t);
   }, []);
 
-  // 집계
-  const stats = useMemo(() => {
+  // 구성원 집계
+  const people: Person[] = useMemo(() => {
     const list = tasks ?? [];
-    const byStatus: Record<string, number> = { 진행중: 0, 업무대기: 0, 보류중: 0, 처리완료: 0 };
-    let doneToday = 0;
-    let stale = 0;
-    for (const t of list) {
-      byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
-      if (isDoneToday(t)) doneToday += 1;
-      if (t.stale) stale += 1;
-    }
-    return { byStatus, doneToday, stale, total: list.length };
+    const names = [...new Set(list.map((t) => t.assignee).filter((n) => n && n !== "미지정"))].sort();
+    return names.map((name, i) => {
+      const owned = list.filter((t) => t.assignee === name);
+      const activeOwned = owned.filter((t) => t.status !== "처리완료");
+      return {
+        name,
+        role: owned.find((t) => t.role)?.role ?? null,
+        color: PALETTE[i % PALETTE.length],
+        owned: owned.length,
+        collab: list.filter((t) => t.collab?.includes(name)).length,
+        requested: list.filter((t) => t.requester === name && t.assignee !== name).length,
+        activeOwned: activeOwned.length,
+        stale: activeOwned.filter((t) => t.stale).length,
+      };
+    });
   }, [tasks]);
 
-  // 담당자별 집계
-  const byAssignee = useMemo(() => {
-    const map = new Map<
-      string,
-      { name: string; role: string | null; 진행중: number; 업무대기: number; 보류중: number; doneToday: number; stale: number; total: number }
-    >();
-    for (const t of tasks ?? []) {
-      const key = t.assignee || "미지정";
-      if (!map.has(key))
-        map.set(key, { name: key, role: t.role, 진행중: 0, 업무대기: 0, 보류중: 0, doneToday: 0, stale: 0, total: 0 });
-      const row = map.get(key)!;
-      if (!row.role && t.role) row.role = t.role;
-      if (t.status === "진행중") row.진행중 += 1;
-      else if (t.status === "업무대기") row.업무대기 += 1;
-      else if (t.status === "보류중") row.보류중 += 1;
-      if (isDoneToday(t)) row.doneToday += 1;
-      if (t.stale) row.stale += 1;
-      row.total += 1;
-    }
-    return [...map.values()].sort((a, b) => b.진행중 + b.업무대기 + b.보류중 - (a.진행중 + a.업무대기 + a.보류중));
-  }, [tasks]);
-
-  const assignees = useMemo(
-    () => ["전체", ...[...new Set((tasks ?? []).map((t) => t.assignee))].sort()],
+  const externals = useMemo(
+    () => [...new Set((tasks ?? []).flatMap((t) => t.ext ?? []))],
     [tasks]
   );
 
-  // 목록 필터
-  const filtered = useMemo(() => {
-    let list = tasks ?? [];
-    if (statusFilter === "정체") list = list.filter((t) => t.stale);
-    else if (statusFilter !== "전체") list = list.filter((t) => t.status === statusFilter);
-    if (assignee !== "전체") list = list.filter((t) => t.assignee === assignee);
-    const q = query.trim();
-    if (q) list = list.filter((t) => (t.name + " " + t.content).includes(q));
-    // 상태 우선순위 → 정체 → 업무일자 순 정렬
-    const order: Record<string, number> = { 진행중: 0, 업무대기: 1, 보류중: 2, 처리완료: 3 };
-    return [...list].sort((a, b) => {
-      const so = (order[a.status] ?? 9) - (order[b.status] ?? 9);
-      if (so) return so;
-      if (a.stale !== b.stale) return a.stale ? -1 : 1;
-      return (b.taskDate || "").localeCompare(a.taskDate || "");
+  // 관계 엣지
+  const edges = useMemo(() => {
+    const list = tasks ?? [];
+    const collab: { a: string; b: string }[] = [];
+    const req: { a: string; b: string }[] = [];
+    const ext: { a: string; b: string }[] = [];
+    const seen = new Set<string>();
+    for (const t of list) {
+      (t.collab ?? []).forEach((c) => {
+        if (c !== t.assignee) {
+          const k = [t.assignee, c].sort().join("|c|");
+          if (!seen.has(k)) { seen.add(k); collab.push({ a: t.assignee, b: c }); }
+        }
+      });
+      if (t.requester && t.requester !== t.assignee) {
+        const k = t.requester + ">" + t.assignee;
+        if (!seen.has(k)) { seen.add(k); req.push({ a: t.requester, b: t.assignee }); }
+      }
+      (t.ext ?? []).forEach((x) => {
+        const k = t.assignee + "|e|" + x;
+        if (!seen.has(k)) { seen.add(k); ext.push({ a: t.assignee, b: x }); }
+      });
+    }
+    return { collab, req, ext };
+  }, [tasks]);
+
+  // SVG 좌표
+  const CX = 360, CY = 210;
+  const pos = useMemo(() => {
+    const p: Record<string, { x: number; y: number }> = {};
+    people.forEach((pn, i) => {
+      const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(people.length, 1);
+      p[pn.name] = { x: CX + Math.cos(a) * 118, y: CY + Math.sin(a) * 112 };
     });
-  }, [tasks, statusFilter, assignee, query]);
+    externals.forEach((x, i) => {
+      const a = -Math.PI / 2 + ((i + 0.5) * 2 * Math.PI) / Math.max(externals.length, 1);
+      p[x] = { x: CX + Math.cos(a) * 258, y: CY + Math.sin(a) * 150 };
+    });
+    return p;
+  }, [people, externals]);
+
+  const connected = (name: string) =>
+    !selected ||
+    name === selected ||
+    [...edges.collab, ...edges.req, ...edges.ext].some(
+      (e) => (e.a === name && e.b === selected) || (e.b === name && e.a === selected)
+    );
+  const edgeVis = (e: { a: string; b: string }) => !selected || e.a === selected || e.b === selected;
+  const pick = (n: string | null) => { setSelected((s) => (s === n ? null : n)); setOpenTask(null); };
+
+  async function toggleLoc(name: string) {
+    const next: WorkLocation = (loc[name] ?? "내근") === "내근" ? "외근" : "내근";
+    setLoc((m) => ({ ...m, [name]: next })); // 낙관적 반영
+    try { setLoc(await setStaffLocation(name, next)); } catch { load(true); }
+  }
 
   if (error && !tasks) return <div className="state state--error">불러오기 실패: {error}</div>;
-  if (!tasks) return <div className="state">업무현황을 불러오는 중…</div>;
+  if (!tasks) return <div className="state">업무 관계도를 불러오는 중…</div>;
+
+  const colorOf = (n: string) => people.find((p) => p.name === n)?.color;
+  const chip = (n: string) => {
+    const c = colorOf(n);
+    return (
+      <span
+        key={n}
+        className="task-chip"
+        onClick={(e) => { e.stopPropagation(); if (c) pick(n); }}
+        style={{ cursor: c ? "pointer" : "default" }}
+      >
+        <span className="task-chip__dot" style={{ background: c ?? "#b6bcc6" }}>{c ? initial(n) : "외"}</span>
+        {n}
+      </span>
+    );
+  };
 
   return (
-    <div className="sales">
-      <div className="sales__toolbar">
-        <span className="sales__updated">
-          {updatedAt ? `갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}` : ""} · 5분마다 자동 갱신
-        </span>
-        <button className="sync-btn" onClick={() => load()} disabled={loading}>
-          {loading ? "불러오는 중…" : "↻ 새로고침"}
-        </button>
+    <div className="sales" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* ===== 관계도 + 구성원 ===== */}
+      <div className="task-top">
+        {/* 관계도 */}
+        <section className="card">
+          <h2 className="card__title">팀 관계도 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· 사람을 클릭하면 관련 업무만 강조</span></h2>
+          <svg viewBox="0 0 720 430" style={{ width: "100%", height: 400, display: "block" }}>
+            <defs>
+              <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,0 L8,4 L0,8 z" fill="#c98d8f" />
+              </marker>
+            </defs>
+            {/* ext edges */}
+            {edges.ext.map((e, i) =>
+              pos[e.a] && pos[e.b] ? (
+                <line key={"x" + i} x1={pos[e.a].x} y1={pos[e.a].y} x2={pos[e.b].x} y2={pos[e.b].y}
+                  stroke="#d6d9de" strokeWidth={1.5} opacity={edgeVis(e) ? 0.9 : 0.12} />
+              ) : null
+            )}
+            {/* collab edges */}
+            {edges.collab.map((e, i) =>
+              pos[e.a] && pos[e.b] ? (
+                <line key={"c" + i} x1={pos[e.a].x} y1={pos[e.a].y} x2={pos[e.b].x} y2={pos[e.b].y}
+                  stroke="#8a93d8" strokeWidth={3} strokeLinecap="round" opacity={edgeVis(e) ? 0.85 : 0.1} />
+              ) : null
+            )}
+            {/* requester edges (arrow) */}
+            {edges.req.map((e, i) => {
+              if (!pos[e.a] || !pos[e.b]) return null;
+              const dx = pos[e.b].x - pos[e.a].x, dy = pos[e.b].y - pos[e.a].y, L = Math.hypot(dx, dy) || 1;
+              return (
+                <line key={"r" + i} x1={pos[e.a].x + (dx * 26) / L} y1={pos[e.a].y + (dy * 26) / L}
+                  x2={pos[e.a].x + dx * (1 - 30 / L)} y2={pos[e.a].y + dy * (1 - 30 / L)}
+                  stroke="#c9564c" strokeWidth={2} strokeDasharray="5 4" markerEnd="url(#arr)"
+                  opacity={edgeVis(e) ? 0.8 : 0.1} />
+              );
+            })}
+            {/* external nodes */}
+            {externals.map((x) =>
+              pos[x] ? (
+                <g key={x} opacity={!selected || edges.ext.some((e) => (e.a === x || e.b === x) && (e.a === selected || e.b === selected)) ? 1 : 0.18}>
+                  <circle cx={pos[x].x} cy={pos[x].y} r={8} fill="#eef0f3" stroke="#c4c9d0" strokeWidth={1.5} />
+                  <text x={pos[x].x} y={pos[x].y + 22} textAnchor="middle" fontSize={10.5} fill="#8d929a">{x}</text>
+                </g>
+              ) : null
+            )}
+            {/* people nodes */}
+            {people.map((pn) => {
+              if (!pos[pn.name]) return null;
+              const r = 17 + pn.owned * 1.4;
+              const on = connected(pn.name);
+              return (
+                <g key={pn.name} style={{ cursor: "pointer" }} opacity={on ? 1 : 0.25} onClick={() => pick(pn.name)}>
+                  {selected === pn.name && (
+                    <circle cx={pos[pn.name].x} cy={pos[pn.name].y} r={r + 6} fill="none" stroke={pn.color} strokeWidth={2} strokeDasharray="3 3" />
+                  )}
+                  <circle cx={pos[pn.name].x} cy={pos[pn.name].y} r={r} fill={pn.color} />
+                  <text x={pos[pn.name].x} y={pos[pn.name].y + 4.5} textAnchor="middle" fontSize={12.5} fontWeight={800} fill="#fff">{initial(pn.name)}</text>
+                  <text x={pos[pn.name].x} y={pos[pn.name].y + r + 15} textAnchor="middle" fontSize={11.5} fontWeight={700} fill="#3a3f47">{pn.name}</text>
+                  <text x={pos[pn.name].x} y={pos[pn.name].y + r + 28} textAnchor="middle" fontSize={9.5} fill="#9aa0a8">{(pn.role || "") + " · 담당 " + pn.owned}</text>
+                </g>
+              );
+            })}
+          </svg>
+          <div className="task-legend">
+            <span><i style={{ borderTopColor: "#8a93d8" }} />협업 (담당↔협업)</span>
+            <span><i style={{ borderTopStyle: "dashed", borderTopColor: "#c9564c" }} />요청 → 담당</span>
+            <span><i className="nd" />외부 (카드사·효성 등)</span>
+          </div>
+        </section>
+
+        {/* 구성원별 현황 */}
+        <section className="card">
+          <h2 className="card__title">구성원별 현황 <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>담당 / 협업 / 요청 · 근무 · 부하</span></h2>
+          <div>
+            {people.map((p) => {
+              const bl = busyLevel(p.activeOwned, p.stale);
+              const here = (loc[p.name] ?? "내근") === "내근";
+              const isSel = selected === p.name;
+              return (
+                <div key={p.name} className={"pcard" + (isSel ? " pcard--sel" : "")}>
+                  <span className="pcard__av" style={{ background: p.color }} onClick={() => pick(p.name)}>{initial(p.name)}</span>
+                  <div onClick={() => pick(p.name)} style={{ cursor: "pointer", minWidth: 0 }}>
+                    <div className="pcard__nm">{p.name}</div>
+                    <div className="pcard__rl">{p.role}</div>
+                  </div>
+                  <div className="pcard__cnts">
+                    <div><div className="pcard__n">{p.owned}</div><div className="pcard__l">담당</div></div>
+                    <div><div className="pcard__n">{p.collab}</div><div className="pcard__l">협업</div></div>
+                    <div><div className="pcard__n">{p.requested}</div><div className="pcard__l">요청</div></div>
+                  </div>
+                  {/* 근무(내근/외근) — 클릭해서 변경 */}
+                  <button
+                    className="loc-btn"
+                    onClick={() => toggleLoc(p.name)}
+                    title="클릭하면 내근↔외근 변경"
+                    style={{ color: here ? "#0369a1" : "#c2410c", background: here ? "#e0f2fe" : "#ffedd5" }}
+                  >
+                    {here ? "🏢 내근" : "🚗 외근"}
+                  </button>
+                  {/* 업무 부하(자동) */}
+                  <span className="busy-badge" style={{ color: bl.color, background: bl.bg }} title="진행 중 담당 업무량 기준 자동 판단">
+                    {bl.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {selected && (
+            <button className="sync-btn" style={{ marginTop: 10 }} onClick={() => pick(null)}>선택 해제</button>
+          )}
+        </section>
       </div>
 
-      {error && <div className="state state--error">갱신 실패: {error}</div>}
-
-      {/* 요약 KPI (클릭 → 목록 필터) */}
-      <div className="sales__kpis">
-        <Kpi label="진행 중" value={stats.byStatus["진행중"]} active={statusFilter === "진행중"} tone="#1d4ed8" onClick={() => setStatusFilter(statusFilter === "진행중" ? "전체" : "진행중")} />
-        <Kpi label="업무 대기" value={stats.byStatus["업무대기"]} active={statusFilter === "업무대기"} onClick={() => setStatusFilter(statusFilter === "업무대기" ? "전체" : "업무대기")} />
-        <Kpi label="보류 중" value={stats.byStatus["보류중"]} active={statusFilter === "보류중"} tone="#b45309" onClick={() => setStatusFilter(statusFilter === "보류중" ? "전체" : "보류중")} />
-        <Kpi label="오늘 완료" value={stats.doneToday} tone="#047857" hint="금일 처리완료" />
-        <Kpi label="정체 업무" value={stats.stale} active={statusFilter === "정체"} tone={stats.stale > 0 ? "#b91c1c" : undefined} hint="오래 멈춘 업무" onClick={() => setStatusFilter(statusFilter === "정체" ? "전체" : "정체")} />
-      </div>
-
-      {/* 담당자별 현황 */}
+      {/* ===== 업무현황표 ===== */}
       <section className="card card--wide">
-        <h2 className="card__title">담당자별 현황</h2>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+          <h2 className="card__title" style={{ margin: 0 }}>업무현황표</h2>
+          <span className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
+            {selected ? `${selected} 관련 · 이름/행 클릭` : `전체 ${tasks.length}건 · 이름 클릭하면 필터, 행 클릭하면 내용`}
+          </span>
+        </div>
         <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ tableLayout: "auto", minWidth: 560 }}>
+          <table className="data-table" style={{ minWidth: 720 }}>
             <thead>
               <tr>
-                <th>담당자</th>
-                <th style={{ textAlign: "right" }}>진행중</th>
-                <th style={{ textAlign: "right" }}>대기</th>
-                <th style={{ textAlign: "right" }}>보류</th>
-                <th style={{ textAlign: "right" }}>오늘완료</th>
-                <th style={{ textAlign: "right" }}>정체</th>
-                <th style={{ textAlign: "right" }}>미완료계</th>
+                <th style={{ width: "32%" }}>업무</th>
+                <th style={{ width: "34%" }}>요청 → 담당 · 협업</th>
+                <th>상태</th>
+                <th>우선순위</th>
               </tr>
             </thead>
             <tbody>
-              {byAssignee.map((r) => (
-                <tr
-                  key={r.name}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setAssignee(assignee === r.name ? "전체" : r.name)}
-                >
-                  <td style={{ fontWeight: 600 }}>
-                    {r.name}
-                    {r.role && <span className="muted" style={{ marginLeft: 6, fontWeight: 400 }}>{r.role}</span>}
-                    {assignee === r.name && <span style={{ marginLeft: 6, color: "var(--brand)" }}>●</span>}
-                  </td>
-                  <Num n={r.진행중} color="#1d4ed8" />
-                  <Num n={r.업무대기} />
-                  <Num n={r.보류중} color="#b45309" />
-                  <Num n={r.doneToday} color="#047857" />
-                  <Num n={r.stale} color="#b91c1c" />
-                  <td style={{ textAlign: "right", fontWeight: 700 }}>{r.진행중 + r.업무대기 + r.보류중}</td>
-                </tr>
-              ))}
+              {tasks.map((t) => {
+                const rel = !selected || t.assignee === selected || t.collab?.includes(selected) || t.requester === selected;
+                const st = STATUS_CLASS[t.status] ?? { fg: "#475569", bg: "#e2e8f0" };
+                const open = openTask === t.id;
+                return (
+                  <Fragment key={t.id}>
+                    <tr
+                      style={{ opacity: rel ? 1 : 0.28, cursor: "pointer", background: open ? "#f7f8fd" : undefined }}
+                      onClick={() => setOpenTask(open ? null : t.id)}
+                    >
+                      <td style={{ fontWeight: 600 }}>
+                        {t.name}
+                        {t.stale && <span className="busy-badge" style={{ color: "#b91c1c", background: "#fee2e2", marginLeft: 6 }}>정체</span>}
+                        <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>{open ? "▲" : "▼"}</span>
+                      </td>
+                      <td>
+                        {t.requester && t.requester !== t.assignee && (<>{chip(t.requester)}<span className="task-arrow">→</span></>)}
+                        {chip(t.assignee)}
+                        {(t.collab ?? []).map((c) => chip(c))}
+                        {(t.ext ?? []).map((x) => chip(x))}
+                      </td>
+                      <td><span className="busy-badge" style={{ color: st.fg, background: st.bg }}>{t.status}</span></td>
+                      <td className="muted" style={{ fontSize: 12 }}>{t.priority || "—"}</td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={4} style={{ background: "#f7f8fd", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                          <b>업무내용</b> · {t.category || "분류 없음"}
+                          {t.taskDate ? ` · 업무일 ${t.taskDate}` : ""}
+                          {"\n"}
+                          {t.content?.trim() || "(작성된 업무내용이 없습니다)"}
+                          {t.url && (
+                            <>{"\n"}<a href={t.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>노션에서 열기 ↗</a></>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>행을 클릭하면 아래 목록이 해당 담당자로 필터됩니다.</p>
-      </section>
-
-      {/* 업무 목록 */}
-      <section className="card card--wide">
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-          <h2 className="card__title" style={{ margin: 0 }}>
-            업무 목록 <span className="muted" style={{ fontWeight: 400 }}>({filtered.length}건)</span>
-          </h2>
-          <div style={{ flex: 1 }} />
-          <select className="agent__select" style={{ width: "auto" }} value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-            {assignees.map((a) => (
-              <option key={a} value={a}>{a === "전체" ? "담당자 전체" : a}</option>
-            ))}
-          </select>
-          <select className="agent__select" style={{ width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as TaskStatus | "정체" | "전체")}>
-            <option value="전체">상태 전체</option>
-            {STATUS_ORDER.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-            <option value="정체">정체만</option>
-          </select>
-          <input
-            className="login__input"
-            style={{ width: 180, margin: 0 }}
-            placeholder="업무명·내용 검색"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {(statusFilter !== "전체" || assignee !== "전체" || query) && (
-            <button className="sync-btn" onClick={() => { setStatusFilter("전체"); setAssignee("전체"); setQuery(""); }}>
-              필터 해제
-            </button>
-          )}
-        </div>
-
-        {filtered.length === 0 ? (
-          <div className="state">조건에 맞는 업무가 없습니다.</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="data-table" style={{ tableLayout: "auto", minWidth: 720 }}>
-              <thead>
-                <tr>
-                  <th>업무명</th>
-                  <th>담당자</th>
-                  <th>상태</th>
-                  <th>우선순위</th>
-                  <th>연관부서</th>
-                  <th>업무일자</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      <a href={t.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)", fontWeight: 600, textDecoration: "none" }}>
-                        {t.name}
-                      </a>
-                      {t.stale && <Badge text="정체" style={{ fg: "#b91c1c", bg: "#fee2e2" }} />}
-                    </td>
-                    <td style={{ whiteSpace: "nowrap" }}>{t.assignee}</td>
-                    <td><Badge text={t.status} style={STATUS_STYLE[t.status]} /></td>
-                    <td>{t.priority ? <Badge text={t.priority} style={PRIORITY_STYLE[t.priority]} /> : <span className="muted">—</span>}</td>
-                    <td className="muted" style={{ fontSize: 12 }}>{t.depts.length ? t.depts.join(", ") : "—"}</td>
-                    <td className="muted" style={{ whiteSpace: "nowrap", fontSize: 12 }}>
-                      {t.status === "처리완료" ? (t.doneDate ? `완료 ${t.doneDate}` : "완료") : t.taskDate || "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </section>
     </div>
-  );
-}
-
-function Kpi({
-  label,
-  value,
-  hint,
-  tone,
-  active,
-  onClick,
-}: {
-  label: string;
-  value: number;
-  hint?: string;
-  tone?: string;
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <section
-      className={`metric${onClick ? " metric--btn" : ""}`}
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      style={active ? { borderColor: "var(--brand)", boxShadow: "0 0 0 2px var(--brand) inset" } : undefined}
-    >
-      <div className="metric__label">{label}</div>
-      <div className="metric__amount" style={{ color: tone }}>{value}건</div>
-      {hint && <div className="metric__hint">{hint}</div>}
-    </section>
-  );
-}
-
-function Num({ n, color }: { n: number; color?: string }) {
-  return (
-    <td style={{ textAlign: "right", color: n > 0 ? color : "var(--muted)", fontWeight: n > 0 ? 700 : 400 }}>
-      {n}
-    </td>
   );
 }

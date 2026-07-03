@@ -1,3 +1,5 @@
+import { SyncButton } from "./SyncButton";
+
 export type Role = "ceo" | "lead" | "staff";
 
 export const ROLES: { key: Role; label: string }[] = [
@@ -23,6 +25,7 @@ export function Header({ title, subtitle, role, onRoleChange, onLogout }: Header
       </div>
 
       <div className="header__actions">
+        <SyncButton />
         <div className="role-switch" role="group" aria-label="역할 선택">
           {ROLES.map((r) => (
             <button

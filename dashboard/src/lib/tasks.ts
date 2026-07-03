@@ -14,6 +14,10 @@ export interface TaskRecord {
   priority: TaskPriority | string | null;
   depts: string[]; // 연관부서
   content: string; // 업무내용
+  collab: string[]; // 협업자 이름들
+  requester: string | null; // 요청자 이름
+  ext: string[]; // 외부 상대(카드사·효성 등)
+  category: string | null; // 업무분류
   taskDate: string | null; // 업무일자
   startDate: string | null; // 진행시작일
   doneDate: string | null; // 완료일
@@ -50,4 +54,38 @@ export function isDoneToday(t: TaskRecord): boolean {
   if (t.status !== "처리완료") return false;
   const ref = (t.doneDate || t.lastStatusChange || t.lastEdited || "").slice(0, 10);
   return ref === todayIso();
+}
+
+// ===== 내근/외근 (ERP에서 직접 변경) =====
+export type WorkLocation = "내근" | "외근";
+export type StaffLocations = Record<string, WorkLocation>;
+
+export async function getStaffLocations(): Promise<StaffLocations> {
+  const res = await fetch("/api/staff-location");
+  if (!res.ok) throw new Error(`근무상태 조회 실패: ${res.status}`);
+  return (await res.json()) as StaffLocations;
+}
+export async function setStaffLocation(name: string, location: WorkLocation): Promise<StaffLocations> {
+  const res = await fetch("/api/staff-location", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, location }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body?.error || `저장 실패: ${res.status}`);
+  return body.locations as StaffLocations;
+}
+
+// ===== 업무 부하 4단계 (자동 판단 — 진행 중인 담당 업무 수 기준) =====
+export interface BusyLevel {
+  label: "여유" | "보통" | "바쁨" | "업무과부하";
+  color: string;
+  bg: string;
+}
+export function busyLevel(activeOwned: number, stale: number): BusyLevel {
+  const score = activeOwned + stale; // 정체 업무는 부하 가중
+  if (score >= 7) return { label: "업무과부하", color: "#b91c1c", bg: "#fee2e2" };
+  if (score >= 5) return { label: "바쁨", color: "#b45309", bg: "#fef3c7" };
+  if (score >= 3) return { label: "보통", color: "#1d4ed8", bg: "#dbeafe" };
+  return { label: "여유", color: "#047857", bg: "#d1fae5" };
 }

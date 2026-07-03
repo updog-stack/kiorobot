@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { won, growth } from "../lib/format";
+import { YoutubeCard } from "./YoutubeCard";
+import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
 import {
   YEAR,
   PREV_YEAR,
@@ -12,8 +15,6 @@ import {
   daou,
   kovan,
   kicc,
-  cs,
-  contentViews,
   contentPubs,
   newCard,
   license,
@@ -33,11 +34,13 @@ function Kpi({
   series,
   hint,
   override,
+  noCompare,
 }: {
   icon: string;
   series: Mseries;
   hint?: string;
   override?: { cur: number; prev: number; value: string };
+  noCompare?: boolean;
 }) {
   const y = ytd(series);
   const cur = override ? override.cur : y.cur;
@@ -55,14 +58,16 @@ function Kpi({
         {series.sample && <span className="ov__sample-tag">샘플</span>}
       </div>
       <div className="metric__amount">{value}</div>
-      <div className="metric__compare">
-        <span className={`metric__badge metric__badge--${g.tone}`}>
-          {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
-        </span>
-        <span className="metric__compare-text">
-          작년 동기간 {fmt(prev, series.unit)}
-        </span>
-      </div>
+      {!noCompare && (
+        <div className="metric__compare">
+          <span className={`metric__badge metric__badge--${g.tone}`}>
+            {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
+          </span>
+          <span className="metric__compare-text">
+            작년 동기간 {fmt(prev, series.unit)}
+          </span>
+        </div>
+      )}
       <div className="metric__hint">
         {hint ?? `${YEAR}년 1~${y.months}월 누적 · 작년 동기 대비`}
       </div>
@@ -172,11 +177,20 @@ function SecHead({ title, note }: { title: string; note?: string }) {
   );
 }
 
+// 유튜브 조회수 KPI용 (실제값은 /api/youtube override 로 채움)
+const YT_VIEWS: Mseries = { key: "ytviews", label: "유튜브 조회수", unit: "views", sample: false, cur: [], prev: [] };
+
 export function Overview() {
   // 사업자 순증 (신규 - 폐업)
   const nb = ytd(newBiz);
   const cb = ytd(closedBiz);
   const netNew = { cur: nb.cur - cb.cur, prev: nb.prev - cb.prev };
+
+  // 유튜브 채널 지표(실데이터)
+  const [yt, setYt] = useState<YoutubeStats | null>(null);
+  useEffect(() => {
+    fetchYoutube().then(setYt).catch(() => {});
+  }, []);
 
   return (
     <div className="ov">
@@ -192,8 +206,21 @@ export function Overview() {
           <Kpi icon="🖥️" series={equipment} />
           <Kpi icon="💳" series={cms} />
           <Kpi icon="🔁" series={van} />
-          <Kpi icon="💬" series={cs} />
-          <Kpi icon="👀" series={contentViews} />
+          <Kpi
+            icon="📺"
+            series={YT_VIEWS}
+            noCompare
+            override={{
+              cur: yt?.totalViews ?? 0,
+              prev: 0,
+              value: yt ? `${yt.totalViews.toLocaleString("ko-KR")}회` : "…",
+            }}
+            hint={
+              yt
+                ? `채널 누적 조회수 · 구독자 ${yt.subscribers.toLocaleString("ko-KR")}명 · 영상 ${yt.videoCount}개`
+                : "유튜브 불러오는 중…"
+            }
+          />
           <Kpi
             icon="🏢"
             series={newBiz}
@@ -232,16 +259,13 @@ export function Overview() {
         <YoYChart series={van} />
       </section>
 
-      {/* ===== 운영 (CS · 콘텐츠) ===== */}
+      {/* ===== 콘텐츠 · 유튜브 ===== */}
       <section className="ov__sec">
-        <SecHead title="운영 지표" note="CS 처리 · 콘텐츠" />
-        <div className="ov__charts">
-          <YoYChart series={cs} />
-          <YoYChart series={contentViews} />
-        </div>
+        <SecHead title="콘텐츠 · 유튜브" note="콘텐츠 발행 · 유튜브 채널" />
         <div className="ov__row">
           <Kpi icon="✍️" series={contentPubs} hint="콘텐츠 발행 건수 (누적)" />
         </div>
+        <YoutubeCard />
       </section>
 
       {/* ===== 사업자 현황 ===== */}

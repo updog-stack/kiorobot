@@ -24,7 +24,8 @@ import { createSign } from "node:crypto";
 import express from "express";
 import { Client } from "@notionhq/client";
 import { createAuth, parseCookies, buildCookie, COOKIE_NAME } from "./lib/auth.mjs";
-import { buildWorklogData, generateAiComment, worklogToText } from "./lib/worklog.mjs";
+import { buildWorklogData, generateAiComment, generateDigest, generateMonthlyDigest, worklogToText, buildWorklogHtml } from "./lib/worklog.mjs";
+import { chromium } from "playwright";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TR_JSON = join(__dirname, "data", "tr.json");
@@ -668,6 +669,176 @@ async function getCs() {
   return applyCsOverrides(data);
 }
 
+// 오늘 '채팅 인입' 기준 요약 (커스텀 리포트의 채팅 부분과 맞춤) — 전화·ALF는 Open API 미제공
+async function csChatSummary() {
+  const { key, secret } = chKeys();
+  if (!key || !secret) return null;
+  const ts = new Date();
+  ts.setHours(0, 0, 0, 0);
+  const since0 = ts.getTime();
+  const managersRes = await chFetch("/managers", { limit: 500 });
+  const nameById = {};
+  for (const m of managersRes.managers ?? []) nameById[m.id] = cleanManagerName(m.name);
+  const chats = await chListUserChats("", since0); // 전체 상태
+  const today = chats.filter((c) => (c.createdAt ?? c.openedAt ?? 0) >= since0);
+  const byAgent = {};
+  let respSum = 0, respN = 0;
+  for (const c of today) {
+    const who = c.assigneeId ? nameById[c.assigneeId] : null;
+    if (who) byAgent[who] = (byAgent[who] || 0) + 1;
+    // 첫 응답까지의 시간(ms) — 운영시간 기준 대기시간(리포트 정의에 근접)
+    const w = c.operationWaitingTime ?? c.waitingTime;
+    if (typeof w === "number" && w > 0) { respSum += w; respN++; }
+  }
+  return {
+    inbound: today.length,
+    waiting: today.filter((c) => c.state === "opened" && c.goalState === "waiting").length,
+    avgFirstResponseSec: respN ? Math.round(respSum / respN / 1000) : 0,
+    byAgent: Object.entries(byAgent).map(([name, handled]) => ({ name, handled })).sort((a, b) => b.handled - a.handled),
+  };
+}
+
+// ===== 채널톡 일일 리포트(서비스별 비율 + 담당자별) — 전화·채널톡·카카오 전부 API 자동 =====
+const CS_REPORT_DIR = join(__dirname, "data", "cs-report");
+if (!existsSync(CS_REPORT_DIR)) mkdirSync(CS_REPORT_DIR, { recursive: true });
+const csReportPath = (date) => join(CS_REPORT_DIR, `${date}.json`);
+
+// 서비스별(전화/채널톡/카카오) 인입 자동 집계 — 전부 채널톡 Open API에서 계산.
+//  전화   = 그날 전체 통화(부재중·아웃바운드 포함), 통화 응대자(lastAssigneeId) 기준
+//  채널톡 = native 상담(생성일), 배정자 기준
+//  카카오 = appKakao 상담(생성일), 배정자 기준
+// (채널톡 자체 리포트의 전화 집계는 내부 로직이라 ±몇 건 오차 가능)
+async function csServiceBreakdown(dateIso) {
+  const { key, secret } = chKeys();
+  if (!key || !secret) return null;
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  const end = start + 24 * 3600 * 1000;
+
+  const managersRes = await chFetch("/managers", { limit: 500 });
+  const nameById = {};
+  for (const mm of managersRes.managers ?? []) nameById[mm.id] = cleanManagerName(mm.name);
+
+  const opened = await chListUserChats("opened");
+  const snoozed = await chListUserChats("snoozed");
+  const closed = await chListUserChats("closed", start);
+  const seen = new Set();
+  const all = [...opened, ...snoozed, ...closed].filter((c) => {
+    if (seen.has(c.id)) return false;
+    seen.add(c.id);
+    return true;
+  });
+
+  const per = {};
+  const tot = { phone: 0, chat: 0, kakao: 0 };
+  const bump = (id, k) => {
+    const name = id ? nameById[id] : null;
+    if (name) {
+      per[name] = per[name] || { phone: 0, chat: 0, kakao: 0 };
+      per[name][k]++;
+    }
+    tot[k]++; // 총계(파이)는 미배정 포함 전체
+  };
+
+  // 전화: 통화 단위(부재중·아웃바운드 포함), 응대자 기준
+  const phoneChats = all.filter(
+    (c) => c.source?.medium?.mediumType === "phone" && (c.updatedAt ?? c.createdAt ?? 0) >= start
+  );
+  for (const c of phoneChats) {
+    const calls = await chatCalls(c);
+    for (const call of calls) {
+      const at = call.at ?? 0;
+      if (at < start || at >= end) continue;
+      bump(call.assignee, "phone");
+    }
+  }
+  await writeFile(CALL_DETAIL_JSON, JSON.stringify(_callCache ?? {})).catch(() => {});
+
+  // 채널톡 메시지(native) / 카카오(appKakao): 상담 단위(생성일), 배정자 기준
+  for (const c of all) {
+    const created = c.createdAt ?? 0;
+    if (created < start || created >= end) continue;
+    if (c.source?.medium?.mediumType === "native") bump(c.assigneeId, "chat");
+    else if (c.source?.appMessenger?.mediumType === "appKakao") bump(c.assigneeId, "kakao");
+  }
+
+  const rows = CS_AGENTS.map((name) => ({
+    name,
+    phone: per[name]?.phone || 0,
+    chat: per[name]?.chat || 0,
+    kakao: per[name]?.kakao || 0,
+  }));
+  return { rows, totalPhone: tot.phone, totalChat: tot.chat, totalKakao: tot.kakao };
+}
+
+const _csBreakCache = {}; // date -> { data, at } (오늘 5분 · 과거 영구 캐시)
+app.get("/api/cs-report", async (req, res) => {
+  try {
+    const date = req.query.date ? String(req.query.date) : localDateIso();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "날짜(YYYY-MM-DD)가 필요합니다." });
+    const isToday = date === localDateIso();
+    const force = req.query.force === "1";
+
+    const cached = _csBreakCache[date];
+    const ttl = isToday ? 5 * 60 * 1000 : Infinity;
+    if (!force && cached && Date.now() - cached.at < ttl) return res.json(cached.data);
+
+    if (!force && !isToday) {
+      const saved = await readJson(csReportPath(date));
+      if (saved && saved.auto) {
+        _csBreakCache[date] = { data: saved, at: Date.now() };
+        return res.json(saved);
+      }
+    }
+
+    const b = await csServiceBreakdown(date);
+    if (!b) {
+      return res.json({
+        date,
+        rows: CS_AGENTS.map((name) => ({ name, phone: 0, chat: 0, kakao: 0 })),
+        totalPhone: 0, totalChat: 0, totalKakao: 0,
+        updatedAt: null, auto: true, note: "채널톡 키 미설정",
+      });
+    }
+    const data = {
+      date,
+      rows: b.rows,
+      totalPhone: b.totalPhone,
+      totalChat: b.totalChat,
+      totalKakao: b.totalKakao,
+      updatedAt: new Date().toISOString(),
+      auto: true,
+    };
+    _csBreakCache[date] = { data, at: Date.now() };
+    await writeFile(csReportPath(date), JSON.stringify(data, null, 2)).catch(() => {});
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+app.post("/api/cs-report", async (req, res) => {
+  try {
+    const date = String(req.body?.date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "날짜(YYYY-MM-DD)가 필요합니다." });
+    const rows = Array.isArray(req.body?.rows)
+      ? req.body.rows
+          .map((r) => ({ name: String(r.name || "").trim(), phone: Math.max(0, Number(r.phone) || 0), chat: Math.max(0, Number(r.chat) || 0) }))
+          .filter((r) => r.name)
+      : [];
+    const data = {
+      date,
+      rows,
+      totalPhone: Math.max(0, Number(req.body?.totalPhone) || 0),
+      totalChat: Math.max(0, Number(req.body?.totalChat) || 0),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeFile(csReportPath(date), JSON.stringify(data, null, 2));
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 app.get("/api/cs", async (_req, res) => res.json(await getCs()));
 app.post("/api/cs/sync", async (_req, res) => res.json(await getCs()));
 
@@ -697,18 +868,28 @@ const LINE_BRAND = {
 // 통화 상세 캐시: 상담별 call 목록 추출(메시지의 meet.call). 종료(closed) 상담은 불변이라 영구 캐시.
 const CALL_DETAIL_JSON = join(__dirname, "data", "call-detail.json");
 let _callCache = null;
+const CALL_CACHE_V = 2; // 통화 객체에 assignee/callState/engaged 추가 → 캐시 버전업
 async function chatCalls(chat) {
   if (!_callCache) _callCache = (await readJson(CALL_DETAIL_JSON)) || {};
   const hit = _callCache[chat.id];
-  if (hit && hit.state === "closed") return hit.calls; // 종료 상담은 캐시 재사용(메시지 재조회 안 함)
+  if (hit && hit.state === "closed" && hit.v === CALL_CACHE_V) return hit.calls; // 종료 상담은 캐시 재사용
   try {
     const j = await chFetch(`/user-chats/${chat.id}/messages`, { limit: 50, sortOrder: "asc" });
     const calls = [];
     for (const m of j.messages ?? []) {
       const cl = m.meet?.call;
-      if (cl && cl.direction) calls.push({ dir: cl.direction, to: cl.to, from: cl.from, at: cl.createAt || m.createdAt });
+      if (cl && cl.direction)
+        calls.push({
+          dir: cl.direction,
+          to: cl.to,
+          from: cl.from,
+          at: cl.createAt || m.createdAt,
+          assignee: cl.lastAssigneeId ?? chat.assigneeId ?? null, // 그 통화 응대자
+          callState: cl.state ?? null, // "ended" | "missed" 등
+          engaged: !!cl.engagedAt, // 실제 연결(응대)됨
+        });
     }
-    _callCache[chat.id] = { state: chat.state, calls };
+    _callCache[chat.id] = { state: chat.state, v: CALL_CACHE_V, calls };
     return calls;
   } catch {
     return hit?.calls ?? [];
@@ -1350,6 +1531,8 @@ function taskValue(prop) {
       return prop.last_edited_time ?? null;
     case "formula":
       return prop.formula?.[prop.formula?.type] ?? null;
+    case "relation":
+      return (prop.relation ?? []).map((r) => r.id);
     case "rollup": {
       const a = prop.rollup?.array ?? [];
       const names = a
@@ -1378,6 +1561,9 @@ function normalizeTask(page) {
     priority: v("우선순위") || null,
     depts: v("연관부서") || [],
     content: v("업무내용") || "",
+    collabIds: v("협업자") || [],
+    requesterIds: v("요청자") || [],
+    category: v("업무분류") || null,
     taskDate: v("업무일자"),
     startDate: v("진행시작일"),
     doneDate: v("완료일"),
@@ -1388,6 +1574,35 @@ function normalizeTask(page) {
     trash: typeof trashFlag === "string" ? trashFlag.trim() !== "" : Boolean(trashFlag),
   };
 }
+
+// 직원 DB (pageId → 이름) — 협업자·요청자 관계를 이름으로 풀기 위함
+const STAFF_DS_ID = "4c6a252e-5579-83ef-ad91-87cf9084180a";
+let staffCache = { at: 0, map: null };
+async function loadStaffMap() {
+  const now = Date.now();
+  if (staffCache.map && now - staffCache.at < 5 * 60 * 1000) return staffCache.map;
+  const map = {};
+  let cursor;
+  do {
+    const res = await notion.dataSources.query({ data_source_id: STAFF_DS_ID, start_cursor: cursor, page_size: 100 });
+    for (const pg of res.results) {
+      let name = "";
+      for (const val of Object.values(pg.properties ?? {})) if (val.type === "title") { name = plain(val.title); break; }
+      if (name) map[pg.id] = name;
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  staffCache = { at: now, map };
+  return map;
+}
+// 업무분류 → 외부 상대(그래프 외부 노드)
+const EXT_MAP = {
+  "카드사 신청업무": "카드사",
+  "가맹점 및 상품등록 업무": "카드사",
+  "채널톡 CS응대": "채널톡 고객",
+  "효성CMS": "효성",
+  "QVAN 업무": "VAN사",
+};
 
 async function loadTasks() {
   const tasks = [];
@@ -1405,9 +1620,36 @@ async function loadTasks() {
     }
     cursor = res.has_more ? res.next_cursor : undefined;
   } while (cursor);
+  // 관계형(협업자·요청자) id → 이름 해석 + 외부 상대 매핑
+  const staff = await loadStaffMap();
+  for (const t of tasks) {
+    t.collab = (t.collabIds || []).map((id) => staff[id]).filter(Boolean).filter((n) => n !== t.assignee);
+    t.requester = (t.requesterIds || []).map((id) => staff[id]).filter(Boolean)[0] || null;
+    t.ext = EXT_MAP[t.category] ? [EXT_MAP[t.category]] : [];
+    delete t.collabIds;
+    delete t.requesterIds;
+  }
   console.log(`  · 업무 DB: ${tasks.length}건`);
   return tasks;
 }
+
+// ===== 내근/외근 상태 (ERP에서 직접 변경, JSON 저장) =====
+const STAFF_LOC_JSON = join(__dirname, "data", "staff-location.json");
+app.get("/api/staff-location", async (_req, res) => {
+  const j = await readJson(STAFF_LOC_JSON);
+  res.json(j?.locations || {});
+});
+app.post("/api/staff-location", async (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  const location = String(req.body?.location || "").trim();
+  if (!name || !["내근", "외근"].includes(location))
+    return res.status(400).json({ error: "name 과 location(내근|외근) 이 필요합니다." });
+  const j = (await readJson(STAFF_LOC_JSON)) || { locations: {} };
+  j.locations = j.locations || {};
+  j.locations[name] = location;
+  await writeFile(STAFF_LOC_JSON, JSON.stringify(j, null, 2));
+  res.json({ ok: true, locations: j.locations });
+});
 
 let tasksCache = { at: 0, data: null };
 app.get("/api/tasks", async (_req, res) => {
@@ -1425,7 +1667,7 @@ app.get("/api/tasks", async (_req, res) => {
 });
 
 // ===== 업무일지 (매일 18:00 자동 생성 + 수동) =====
-const WORKLOG_HOUR = 18; // 오후 6시
+const WORKLOG_HOUR = 19; // 오후 7시
 
 function localDateIso(d = new Date()) {
   const y = d.getFullYear();
@@ -1455,10 +1697,34 @@ async function generateWorklog({ auto = false } = {}) {
     }
     const tasks = await loadTasks();
     const data = buildWorklogData(tasks, date);
-    const aiComment = await generateAiComment(data, process.env.ANTHROPIC_API_KEY);
+    const [aiComment, digest] = await Promise.all([
+      generateAiComment(data, process.env.ANTHROPIC_API_KEY),
+      generateDigest(data, process.env.ANTHROPIC_API_KEY),
+    ]);
+    // 오늘 채널톡 '채팅 인입' 요약 첨부(전화·ALF는 Open API 미제공 → 제외). 실패해도 일지 생성은 계속
+    let cs = null;
+    try {
+      cs = await csChatSummary();
+    } catch (e) {
+      console.warn("업무일지 CS 요약 실패(무시):", String(e?.message ?? e));
+    }
+    // 브리핑 섹션 안정화: AI가 비워 보낸 항목은 데이터로 보완(특히 '내일')
+    if (digest) {
+      digest.threeLine = Array.isArray(digest.threeLine) ? digest.threeLine : [];
+      digest.flow = Array.isArray(digest.flow) ? digest.flow : [];
+      digest.stories = Array.isArray(digest.stories) ? digest.stories : [];
+      digest.watch = Array.isArray(digest.watch) ? digest.watch : [];
+      if (!Array.isArray(digest.tomorrow) || digest.tomorrow.length === 0) {
+        const ip = (data.assignees || []).flatMap((a) => (a.inProgress || []).map((t) => `${t.name} 이어서 진행 (${a.name})`)).slice(0, 3);
+        const oh = (data.assignees || []).flatMap((a) => (a.onHold || []).map((t) => `${t.name} 처리 (${a.name})`)).slice(0, 2);
+        digest.tomorrow = [...ip, ...oh];
+      }
+    }
     const report = {
       ...data,
       aiComment,
+      digest, // 데일리 브리핑(세 줄 요약·오늘의 이야기·지켜볼것·내일)
+      cs, // 오늘 채널톡 CS 응대 요약
       text: worklogToText(data),
       auto,
       note,
@@ -1556,7 +1822,146 @@ app.post("/api/worklog/note", async (req, res) => {
   }
 });
 
-// 매일 18:00 자동 생성 스케줄러(BFF 가동 중일 때) + 가동 시 당일 누락분 보완
+// ===== 월간 업무일지 (매월 1일: 직전 월 일일일지 종합) =====
+const monthlyPath = (ym) => join(WORKLOGS_DIR, `monthly-${ym}.json`);
+function prevMonthYm(d = new Date()) {
+  const y = d.getFullYear(), m = d.getMonth(); // m: 0~11
+  return m === 0 ? `${y - 1}-12` : `${y}-${String(m).padStart(2, "0")}`;
+}
+async function generateMonthlyWorklog(ym) {
+  const files = await readdir(WORKLOGS_DIR).catch(() => []);
+  const dayFiles = files.filter((f) => f.startsWith(ym + "-") && /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const perPerson = {};
+  const notes = [];
+  let doneTotal = 0, dayCount = 0;
+  for (const f of dayFiles) {
+    const r = await readJson(join(WORKLOGS_DIR, f));
+    if (!r) continue;
+    dayCount++;
+    doneTotal += r.summary?.doneToday || 0;
+    for (const a of r.assignees || []) {
+      const p = (perPerson[a.name] = perPerson[a.name] || { name: a.name, role: a.role || null, done: 0 });
+      if (a.role && !p.role) p.role = a.role;
+      p.done += a.done?.length || 0;
+    }
+    if (r.note && r.note.trim()) notes.push({ date: r.date, note: r.note.trim() });
+  }
+  const people = Object.values(perPerson).sort((a, b) => b.done - a.done);
+  // 월간 AI 브리핑
+  const monthText =
+    `■ ${ym} 월간 업무 종합\n집계 ${dayCount}일 · 총 완료 ${doneTotal}건\n\n[구성원별 완료]\n` +
+    people.map((p) => `· ${p.name}${p.role ? `(${p.role})` : ""}: ${p.done}건`).join("\n") +
+    (notes.length ? `\n\n[직접 작성 메모 발췌]\n` + notes.slice(0, 20).map((n) => `(${n.date}) ${n.note}`).join("\n") : "");
+  const ai = await generateMonthlyDigest(monthText, process.env.ANTHROPIC_API_KEY);
+  const digest = {
+    month: ym,
+    dayCount,
+    doneTotal,
+    people,
+    notes,
+    ai, // 월간 AI 브리핑(세 줄 요약·하이라이트)
+    generatedAt: new Date().toISOString(),
+  };
+  await writeFile(monthlyPath(ym), JSON.stringify(digest, null, 2));
+  console.log(`🗓️ 월간 업무일지 생성: ${ym} — 완료 ${doneTotal}건 / ${dayCount}일`);
+  return digest;
+}
+async function listWorklogMonths() {
+  try {
+    const files = await readdir(WORKLOGS_DIR);
+    return files.filter((f) => /^monthly-\d{4}-\d{2}\.json$/.test(f)).map((f) => f.slice(8, 15)).sort().reverse();
+  } catch {
+    return [];
+  }
+}
+app.get("/api/worklog/monthly", async (req, res) => {
+  try {
+    const months = await listWorklogMonths();
+    const month = req.query.month ? String(req.query.month) : months[0] || prevMonthYm();
+    let digest = await readJson(monthlyPath(month));
+    if (!digest) digest = await generateMonthlyWorklog(month); // 없으면 즉석 생성
+    if (!months.includes(month)) months.unshift(month);
+    res.json({ exists: !!digest, months, digest });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// ===== 업무일지 PDF 저장 / 대표님 슬랙 전송 =====
+async function getWorklogReport(date) {
+  const d = date || (await listWorklogDates())[0];
+  if (!d || !existsSync(worklogPath(d))) return null;
+  return JSON.parse(await readFile(worklogPath(d), "utf8"));
+}
+async function renderPdf(html) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle" });
+    return await page.pdf({ format: "A4", printBackground: true, margin: { top: "12mm", bottom: "12mm", left: "12mm", right: "12mm" } });
+  } finally {
+    await browser.close();
+  }
+}
+async function slackUploadPdf(pdf, filename, title, comment) {
+  const { SLACK_BOT_TOKEN, SLACK_CEO_CHANNEL } = process.env;
+  if (!SLACK_BOT_TOKEN || !SLACK_CEO_CHANNEL)
+    throw new Error("SLACK_BOT_TOKEN / SLACK_CEO_CHANNEL(.env) 설정이 필요합니다 — 대표님 슬랙 전송용");
+  // 대상이 사용자 ID(U…)면 DM 채널을 열어 그 채널로 보낸다
+  let channelId = SLACK_CEO_CHANNEL;
+  if (/^U/i.test(channelId)) {
+    const o = await (await fetch("https://slack.com/api/conversations.open", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ users: SLACK_CEO_CHANNEL }),
+    })).json();
+    if (!o.ok) throw new Error("DM 열기 오류: " + o.error + " (봇에 im:write 권한 필요)");
+    channelId = o.channel.id;
+  }
+  const u = await (await fetch("https://slack.com/api/files.getUploadURLExternal", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ filename, length: String(pdf.length) }),
+  })).json();
+  if (!u.ok) throw new Error("Slack 업로드URL 오류: " + u.error);
+  const put = await fetch(u.upload_url, { method: "POST", body: pdf });
+  if (!put.ok) throw new Error("Slack 파일 전송 오류: " + put.status);
+  const c = await (await fetch("https://slack.com/api/files.completeUploadExternal", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ files: [{ id: u.file_id, title }], channel_id: channelId, initial_comment: comment }),
+  })).json();
+  if (!c.ok) throw new Error("Slack 업로드 완료 오류: " + c.error);
+  return c;
+}
+
+app.get("/api/worklog/pdf", async (req, res) => {
+  try {
+    const date = req.query.date ? String(req.query.date) : (await listWorklogDates())[0];
+    const report = await getWorklogReport(date);
+    if (!report) return res.status(404).json({ error: "해당 날짜 업무일지가 없습니다." });
+    const pdf = await renderPdf(buildWorklogHtml(report));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="worklog-${date}.pdf"`);
+    res.send(pdf);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+app.post("/api/worklog/send-slack", async (req, res) => {
+  try {
+    const date = req.body?.date ? String(req.body.date) : (await listWorklogDates())[0];
+    const report = await getWorklogReport(date);
+    if (!report) return res.status(404).json({ error: "해당 날짜 업무일지가 없습니다." });
+    const pdf = await renderPdf(buildWorklogHtml(report));
+    await slackUploadPdf(pdf, `업무일지_${date}.pdf`, `업무일지 ${date}`, `📄 ${date} 업무일지입니다.`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 매일 19:00 자동 생성 스케줄러(BFF 가동 중일 때) + 가동 시 당일 누락분 보완
 function msUntilNextWorklog() {
   const now = new Date();
   const next = new Date(now);
@@ -1570,6 +1975,8 @@ function scheduleDailyWorklog() {
   setTimeout(async () => {
     try {
       await generateWorklog({ auto: true });
+      // 매월 1일이면 직전 월 종합(월간 업무일지) 생성
+      if (new Date().getDate() === 1) await generateMonthlyWorklog(prevMonthYm());
     } catch (e) {
       console.error("업무일지 자동생성 실패:", String(e?.message ?? e));
     }
@@ -1577,17 +1984,156 @@ function scheduleDailyWorklog() {
   }, wait);
 }
 async function catchUpWorklog() {
-  // 이미 18시가 지났는데 오늘 일지가 없으면(예: PC가 18시에 꺼져 있었음) 보완 생성
   const now = new Date();
-  if (now.getHours() < WORKLOG_HOUR) return;
-  const date = localDateIso(now);
-  if (existsSync(worklogPath(date))) return;
-  try {
-    console.log("🔁 오늘(18시 이후) 업무일지 누락 감지 → 보완 생성");
-    await generateWorklog({ auto: true });
-  } catch (e) {
-    console.error("업무일지 보완 생성 실패:", String(e?.message ?? e));
+  // 이미 19시가 지났는데 오늘 일지가 없으면(예: PC가 19시에 꺼져 있었음) 보완 생성
+  if (now.getHours() >= WORKLOG_HOUR && !existsSync(worklogPath(localDateIso(now)))) {
+    try {
+      console.log("🔁 오늘(19시 이후) 업무일지 누락 감지 → 보완 생성");
+      await generateWorklog({ auto: true });
+    } catch (e) {
+      console.error("업무일지 보완 생성 실패:", String(e?.message ?? e));
+    }
   }
+  // 1일인데 직전 월 종합이 없으면 보완 생성
+  if (now.getDate() === 1) {
+    const pm = prevMonthYm(now);
+    if (!existsSync(monthlyPath(pm))) {
+      try {
+        await generateMonthlyWorklog(pm);
+      } catch (e) {
+        console.error("월간 업무일지 보완 생성 실패:", String(e?.message ?? e));
+      }
+    }
+  }
+}
+
+// ===== 유튜브 채널 지표 (YouTube Data API v3, 공개지표) =====
+const { YOUTUBE_API_KEY, YOUTUBE_CHANNEL } = process.env;
+let ytCache = { at: 0, data: null };
+const YT_TTL = 10 * 60 * 1000; // 10분 캐시(할당량 보호)
+
+async function ytFetch(path, params) {
+  const url = new URL("https://www.googleapis.com/youtube/v3/" + path);
+  for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
+  url.searchParams.set("key", YOUTUBE_API_KEY);
+  const r = await fetch(url);
+  const j = await r.json();
+  if (!r.ok) throw new Error(`유튜브 API ${r.status}: ${j?.error?.message ?? ""}`);
+  return j;
+}
+
+async function loadYoutube() {
+  const ch = String(YOUTUBE_CHANNEL || "").trim();
+  // 채널ID(UC…) 또는 핸들(@…) 모두 지원
+  const chParams = /^UC[\w-]{22}$/.test(ch)
+    ? { id: ch }
+    : { forHandle: ch.startsWith("@") ? ch : "@" + ch };
+  const cj = await ytFetch("channels", { part: "snippet,statistics,contentDetails", ...chParams });
+  const c = cj.items?.[0];
+  if (!c) throw new Error("채널을 찾지 못했습니다 — YOUTUBE_CHANNEL 값을 확인하세요(채널ID UC… 또는 @핸들).");
+  const uploads = c.contentDetails?.relatedPlaylists?.uploads;
+  let recentVideos = [];
+  if (uploads) {
+    const pj = await ytFetch("playlistItems", { part: "contentDetails", playlistId: uploads, maxResults: 6 });
+    const ids = (pj.items ?? []).map((i) => i.contentDetails.videoId).filter(Boolean).join(",");
+    if (ids) {
+      const vj = await ytFetch("videos", { part: "snippet,statistics", id: ids });
+      recentVideos = (vj.items ?? []).map((v) => ({
+        id: v.id,
+        title: v.snippet?.title ?? "",
+        views: Number(v.statistics?.viewCount ?? 0),
+        publishedAt: v.snippet?.publishedAt ?? null,
+        url: "https://youtu.be/" + v.id,
+        thumb:
+          v.snippet?.thumbnails?.maxres?.url ??
+          v.snippet?.thumbnails?.high?.url ??
+          v.snippet?.thumbnails?.medium?.url ??
+          v.snippet?.thumbnails?.default?.url ??
+          null,
+      }));
+    }
+  }
+  const s = c.statistics ?? {};
+  return {
+    channelTitle: c.snippet?.title ?? "",
+    thumb: c.snippet?.thumbnails?.default?.url ?? null,
+    url: ch.startsWith("UC")
+      ? "https://youtube.com/channel/" + ch
+      : "https://youtube.com/" + (ch.startsWith("@") ? ch : "@" + ch),
+    subscribers: Number(s.subscriberCount ?? 0),
+    totalViews: Number(s.viewCount ?? 0),
+    videoCount: Number(s.videoCount ?? 0),
+    recentVideos,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+app.get("/api/youtube", async (_req, res) => {
+  try {
+    if (!YOUTUBE_API_KEY || !YOUTUBE_CHANNEL)
+      return res.status(400).json({ error: "YOUTUBE_API_KEY / YOUTUBE_CHANNEL(.env) 설정이 필요합니다 — 유튜브 지표용" });
+    const now = Date.now();
+    if (!ytCache.data || now - ytCache.at > YT_TTL) ytCache = { at: now, data: await loadYoutube() };
+    res.json(ytCache.data);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// ===== 전체 데이터 동기화 (수집 스크래퍼 + 캐시 갱신) — 수동 버튼 / 매일 8시 =====
+const COLLECT_SCRIPTS = [
+  "kovan-tr-scraper.mjs",
+  "ddwm-tr-scraper.mjs",
+  "kovan-inactive-scraper.mjs",
+  "ddwm-inactive-scraper.mjs",
+];
+let collectState = { running: false, startedAt: null, finishedAt: null, ok: null, errors: [], auto: false };
+
+async function runCollect({ auto = false } = {}) {
+  if (collectState.running) return collectState;
+  collectState = { running: true, startedAt: new Date().toISOString(), finishedAt: null, ok: null, errors: [], auto };
+  console.log(`📦 데이터 동기화 시작 (${auto ? "자동 8시" : "수동"})`);
+  try {
+    for (const s of COLLECT_SCRIPTS) {
+      const r = await runScript(s);
+      if (r.code !== 0) collectState.errors.push(`${s}: ${(r.stderr.trim().split("\n").pop() || "실패")}`);
+    }
+    ytCache = { at: 0, data: null }; // 유튜브 캐시 무효화 → 다음 조회 시 최신
+  } catch (e) {
+    collectState.errors.push(String(e?.message ?? e));
+  } finally {
+    collectState.running = false;
+    collectState.finishedAt = new Date().toISOString();
+    collectState.ok = collectState.errors.length === 0;
+    console.log(`📦 데이터 동기화 완료 — 오류 ${collectState.errors.length}건`);
+  }
+  return collectState;
+}
+
+app.post("/api/collect", (_req, res) => {
+  if (collectState.running) return res.status(409).json({ error: "이미 동기화 진행 중입니다.", state: collectState });
+  runCollect({ auto: false }); // 수 분 소요 → 기다리지 않고 백그라운드 실행
+  res.json({ started: true });
+});
+app.get("/api/collect/status", (_req, res) => res.json(collectState));
+
+// 매일 08:00 자동 데이터 동기화 스케줄러
+const COLLECT_HOUR = 8;
+function scheduleDailyCollect() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(COLLECT_HOUR, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const wait = next - now;
+  console.log(`⏰ 다음 데이터 동기화까지 ${Math.round(wait / 60000)}분 (매일 ${COLLECT_HOUR}:00)`);
+  setTimeout(async () => {
+    try {
+      await runCollect({ auto: true });
+    } catch (e) {
+      console.error("자동 데이터 동기화 실패:", String(e?.message ?? e));
+    }
+    scheduleDailyCollect();
+  }, wait);
 }
 
 // ===== 구글캘린더 일정 (읽기 전용) =====
@@ -1938,4 +2484,6 @@ app.listen(Number(BFF_PORT), () => {
   // 업무일지: 매일 18:00 자동 생성 예약 + 가동 시 당일 누락분 보완
   scheduleDailyWorklog();
   catchUpWorklog();
+  // 데이터 동기화: 매일 08:00 자동 수집(코밴·다우데이타 거래·무실적)
+  scheduleDailyCollect();
 });
