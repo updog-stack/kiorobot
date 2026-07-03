@@ -1052,6 +1052,143 @@ app.post("/api/blog-analyze", async (req, res) => {
   }
 });
 
+// ===== 프롬프트 생성기 — 플랫폼별 노출 콘텐츠 생성 (Claude) =====
+// 주제/키워드 → 유튜브·인스타그램·틱톡/스레드에 바로 올릴 제목·설명·해시태그를 생성.
+const CONTENT_PLATFORMS = {
+  youtube: {
+    label: "유튜브",
+    guide:
+      "유튜브 검색·추천 노출 기준: 제목은 핵심 키워드를 앞쪽에 두고 클릭을 부르는 후킹형(궁금증·수치·혜택) 5개. " +
+      "body는 영상 설명란에 그대로 붙일 설명문(첫 2줄에 핵심 요약+키워드, 이후 상세, CTA 포함, 300~600자). " +
+      "hashtags는 제목/설명에 어울리는 # 해시태그 3~5개(유튜브는 과다 금지). tags는 검색 최적화용 태그(# 없이) 10~15개.",
+  },
+  instagram: {
+    label: "인스타그램",
+    guide:
+      "인스타그램 릴스/피드 노출 기준: titles는 첫 줄에 시선을 잡는 후킹 문구 3~5개. " +
+      "body는 캡션(도입 후킹 → 핵심 3~4줄 → 저장/팔로우 유도 CTA, 이모지 자연스럽게, 300자 내외). " +
+      "hashtags는 도달용(대형)·틈새(중소형)·브랜드 태그를 섞어 15~25개. tags는 빈 배열.",
+  },
+  tiktok: {
+    label: "틱톡·스레드",
+    guide:
+      "숏폼(틱톡·스레드·쇼츠) 노출 기준: titles는 3초 안에 멈추게 하는 강한 후킹 한 줄 3~5개. " +
+      "body는 아주 짧고 구어체인 캡션(1~2문장, 이모지 가능). hashtags는 트렌드+틈새 섞어 5~10개. tags는 빈 배열.",
+  },
+  naver: {
+    label: "네이버 블로그",
+    guide:
+      "네이버 블로그 검색 노출(SEO) 기준: titles는 핵심 키워드를 앞쪽에 둔 제목 후보 3~5개. " +
+      "body는 그대로 붙여넣을 완성 본문 초안(도입부에서 검색 의도에 빠르게 답하고, 소제목·문단으로 구조화, 핵심 키워드를 자연스럽게 반복(스터핑 금지), 800~1500자). " +
+      "마크다운·HTML 없이 순수 텍스트로, 소제목은 빈 줄 뒤 일반 텍스트로 작성. " +
+      "hashtags는 본문 하단에 붙일 #해시태그 5~10개. tags는 블로그 '태그' 입력란용 키워드(# 없이) 8~15개.",
+  },
+};
+const CONTENT_TONES = {
+  hook: "클릭·조회를 부르는 후킹·자극형",
+  info: "정보 전달 중심의 신뢰형",
+  friendly: "친근하고 대화하는 말투",
+  promo: "제품·이벤트 홍보에 초점",
+};
+
+app.post("/api/content-generate", async (req, res) => {
+  try {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key)
+      return res.status(500).json({ error: "ANTHROPIC_API_KEY(.env)가 설정되지 않았습니다." });
+
+    const topic = String(req.body?.topic ?? "").trim();
+    if (topic.length < 2)
+      return res.status(400).json({ error: "주제/키워드를 입력해 주세요." });
+
+    const reqPlatforms = Array.isArray(req.body?.platforms) ? req.body.platforms : [];
+    const platforms = reqPlatforms.filter((p) => CONTENT_PLATFORMS[p]);
+    if (platforms.length === 0)
+      return res.status(400).json({ error: "플랫폼을 하나 이상 선택해 주세요." });
+
+    const tone = CONTENT_TONES[req.body?.tone] ? req.body.tone : "hook";
+    const extra = String(req.body?.extra ?? "").trim().slice(0, 500);
+    const modelId = BLOG_MODELS[req.body?.model] ? req.body.model : BLOG_DEFAULT_MODEL;
+    const cfg = BLOG_MODELS[modelId];
+
+    const platformGuides = platforms
+      .map((p) => `- ${p}(${CONTENT_PLATFORMS[p].label}): ${CONTENT_PLATFORMS[p].guide}`)
+      .join("\n");
+
+    const system =
+      "당신은 국내 소셜미디어 마케팅·검색 노출(SEO/추천 알고리즘) 전문가입니다. " +
+      "주어진 주제로 각 플랫폼에 '바로 복사해 올릴 수 있는' 완성 콘텐츠를 한국어로 만드세요. " +
+      "★최우선 목표: '노출이 쉽고 잘 되는' 콘텐츠. " +
+      "경쟁이 극심한 대형 키워드에만 의존하지 말고, 검색·조회 수요는 있으면서 경쟁이 낮은 세부(롱테일) 키워드와 " +
+      "지역·업종·상황을 좁힌 표현을 적극 활용해 실제로 상위 노출·추천에 걸릴 확률을 높이세요. " +
+      "제목·첫 문장·해시태그 맨 앞에는 사람들이 실제로 검색·클릭하는 표현을 배치하고, " +
+      "해시태그는 대형(도달)·중소형(틈새)을 반드시 섞어 상위 노출이 쉬운 틈새 태그를 우선 포함하세요. " +
+      `요청된 톤: ${CONTENT_TONES[tone]}.\n` +
+      "플랫폼별 작성 기준:\n" +
+      platformGuides +
+      "\n\n규칙: 실제로 쓸 수 있는 자연스러운 문장으로 작성하고, 없는 사실을 지어내지 마세요(불명확하면 [여기에 OO] 형태 빈칸). " +
+      "마크다운·코드펜스 없이 순수 JSON 객체만 출력하세요. hashtags 항목은 각 원소를 '#키워드' 형식으로, tags는 '#' 없이 작성하세요.\n" +
+      "출력 스키마:\n" +
+      '{"results":[{"platform":"<요청한 플랫폼 키>","titles":["..."],"body":"...","hashtags":["#..."],"tags":["..."],"tips":["노출 팁"]}]}';
+
+    const user =
+      `주제/키워드: ${topic}\n` +
+      `대상 플랫폼: ${platforms.join(", ")}\n` +
+      (extra ? `추가 정보(제품명·강조점·이벤트 등): ${extra}\n` : "") +
+      `\n각 플랫폼마다 위 스키마의 항목을 채워 results 배열로 출력하세요.`;
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 8192,
+        system,
+        messages: [{ role: "user", content: user }],
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j?.error?.message || `Claude API ${r.status}`);
+
+    let text = (j.content ?? []).map((b) => b.text || "").join("");
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const parsed = JSON.parse(text);
+    const rawResults = Array.isArray(parsed?.results) ? parsed.results : [];
+    // 요청한 플랫폼 순서대로 정리 + 라벨 부여
+    const results = platforms
+      .map((p) => {
+        const found = rawResults.find((x) => x?.platform === p) || {};
+        return {
+          platform: p,
+          label: CONTENT_PLATFORMS[p].label,
+          titles: Array.isArray(found.titles) ? found.titles.filter(Boolean) : [],
+          body: typeof found.body === "string" ? found.body : "",
+          hashtags: Array.isArray(found.hashtags) ? found.hashtags.filter(Boolean) : [],
+          tags: Array.isArray(found.tags) ? found.tags.filter(Boolean) : [],
+          tips: Array.isArray(found.tips) ? found.tips.filter(Boolean) : [],
+        };
+      })
+      .filter((x) => x.titles.length || x.body || x.hashtags.length);
+
+    const inTok = j.usage?.input_tokens || 0;
+    const outTok = j.usage?.output_tokens || 0;
+    const usd = (inTok * cfg.priceIn + outTok * cfg.priceOut) / 1_000_000;
+
+    res.json({
+      results,
+      usedModel: modelId,
+      cost: { inputTokens: inTok, outputTokens: outTok, usd, krw: Math.round(usd * 1400) },
+    });
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (/quota|rate|429|overloaded/i.test(msg))
+      return res.status(429).json({ error: "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요." });
+    if (msg.includes("JSON"))
+      return res.status(502).json({ error: "생성 결과 형식이 올바르지 않습니다. 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
 // 사진 업로드 (base64 → 파일 저장 → URL 반환). 꿀팁게시판 첨부용.
 app.post("/api/upload", async (req, res) => {
   try {
