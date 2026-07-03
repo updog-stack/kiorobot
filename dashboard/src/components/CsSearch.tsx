@@ -66,16 +66,38 @@ export function CsSearch() {
     setRefreshing(true);
     setError(null);
     setCollectInfo(null);
+    // 한 요청은 짧게(청크) 유지하고, 남은 신규(truncated)가 0이 될 때까지 자동 반복 → 사실상 한도 없음.
+    const CHUNK = 400;
+    const MAX_ROUNDS = 500; // 안전장치(최대 20만 건)
+    let totalAdded = 0;
+    let count = 0;
     try {
-      const r = await collectCsIndex(from, to);
-      const parts = [`신규 ${r.added ?? 0}건 수집`];
-      if (r.skipped) parts.push(`중복 ${r.skipped}건 제외`);
-      if (r.truncated) parts.push(`한도 초과 ${r.truncated}건은 기간을 좁혀 다시 수집하세요`);
-      setCollectInfo(`${parts.join(" · ")} (총 ${r.count?.toLocaleString() ?? 0}건 검색 가능)`);
-      // 메타를 최신 상태로 다시 조회
+      for (let round = 1; round <= MAX_ROUNDS; round++) {
+        const r = await collectCsIndex(from, to, CHUNK);
+        totalAdded += r.added ?? 0;
+        count = r.count ?? count;
+        const remaining = r.truncated ?? 0;
+        setCollectInfo(
+          `수집 중… 신규 ${totalAdded.toLocaleString()}건${
+            remaining ? ` · 남은 약 ${remaining.toLocaleString()}건` : ""
+          } (총 ${count.toLocaleString()}건)`
+        );
+        setMeta(await getCsIndex());
+        // 남은 게 없거나, 이번 라운드에 새로 모은 게 없으면(전부 본문 없음 등) 종료
+        if (!remaining || (r.added ?? 0) === 0) break;
+      }
+      setCollectInfo(
+        `✅ 완료 · 이번에 신규 ${totalAdded.toLocaleString()}건 수집 (총 ${count.toLocaleString()}건 검색 가능)`
+      );
       setMeta(await getCsIndex());
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      // 진행분은 서버가 라운드마다 저장하므로 유실 없음. 다시 누르면 이어서 수집.
+      setMeta(await getCsIndex().catch(() => meta));
+      setError(
+        `수집 중 오류(지금까지 신규 ${totalAdded.toLocaleString()}건은 저장됨): ${String(
+          e instanceof Error ? e.message : e
+        )} — 다시 누르면 이어서 수집합니다.`
+      );
     } finally {
       setRefreshing(false);
     }
@@ -124,11 +146,11 @@ export function CsSearch() {
             />
           </label>
           <button className="cs-refresh" onClick={doCollect} disabled={refreshing}>
-            {refreshing ? "수집 중… (수 분 소요)" : "📥 이 기간 수집"}
+            {refreshing ? "수집 중… (자동 진행)" : "📥 이 기간 수집"}
           </button>
         </div>
         <p className="cs-collect__hint">
-          선택한 기간의 종료된 상담을 모읍니다. <b>이미 모은 상담은 자동으로 건너뛰어</b> 중복 수집하지 않습니다.
+          선택한 기간의 종료된 상담을 <b>한도 없이 전부</b> 자동으로 모읍니다(끝날 때까지 이어서 수집). <b>이미 모은 상담은 자동으로 건너뛰어</b> 중복 수집하지 않으며, 건수가 많으면 수 분~수십 분 걸릴 수 있습니다.
         </p>
         {collectInfo && <p className="cs-collect__result">✅ {collectInfo}</p>}
       </div>

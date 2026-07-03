@@ -1483,7 +1483,8 @@ app.post("/api/cs-index/refresh", async (req, res) => {
     }
     if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs)
       return res.status(400).json({ error: "기간이 올바르지 않습니다. 시작일·종료일을 확인하세요." });
-    const limit = Math.min(3000, Math.max(50, Number(req.body?.limit) || 1000));
+    // 상한 사실상 제거(프론트가 truncated=0까지 청크로 반복 수집). 안전장치로 20000만 유지.
+    const limit = Math.min(20000, Math.max(50, Number(req.body?.limit) || 1000));
 
     // 기존 인덱스 로드 → 이미 모은 상담 id 집합(중복 수집 방지용)
     const prev = await readJson(CS_INDEX_JSON);

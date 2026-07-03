@@ -39,11 +39,12 @@ export async function getCsIndex(): Promise<CsIndexMeta> {
 }
 
 // 지정 기간(from~to, YYYY-MM-DD)의 상담을 수집. 이미 모은 상담은 서버가 건너뜀(중복 방지).
-export async function collectCsIndex(from: string, to: string): Promise<CsIndexMeta> {
+// limit: 한 번에 모을 최대 건수(청크). 프론트가 truncated=0까지 반복 호출해 사실상 무제한 수집.
+export async function collectCsIndex(from: string, to: string, limit?: number): Promise<CsIndexMeta> {
   const res = await fetch("/api/cs-index/refresh", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to }),
+    body: JSON.stringify(limit ? { from, to, limit } : { from, to }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body?.error || `수집 실패: ${res.status}`);
