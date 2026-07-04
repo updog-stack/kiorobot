@@ -600,7 +600,9 @@ async function csDataFromChannel() {
 
   const opened = await chListUserChats("opened");
   const closed = await chListUserChats("closed", ts);
-  const closedToday = closed.filter((c) => (c.closedAt ?? 0) >= ts);
+  // '오늘 처리'는 '오늘 인입(생성)되어 종료된 상담' 기준.
+  // (어제 이전 상담이 채널톡 24시간 자동종료로 오늘 닫히면서 '오늘 처리'에 잡히는 착시 제거)
+  const closedToday = closed.filter((c) => (c.createdAt ?? 0) >= ts);
 
   const item = (c) => ({
     name: c.name || "(이름 없음)",
