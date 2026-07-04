@@ -2099,6 +2099,116 @@ async function slackUploadPdf(pdf, filename, title, comment) {
   return c;
 }
 
+// ===== 아무도없개 새 상담 → 특정인 슬랙 DM 알림 =====
+const AMUDO_JSON = join(__dirname, "data", "amudo-notified.json");
+const AMUDO_WF = "750171"; // 아무도없개 콜라인 워크플로우
+
+// 이름 / 태그 / 콜라인으로 '아무도없개' 상담 판별
+function isAmudoChat(c) {
+  if (/아무도없개/.test(c.name || "")) return true;
+  if ((c.tags || []).some((t) => /아무도없개/.test(t))) return true;
+  if (c.source?.workflow?.id === AMUDO_WF) return true;
+  return false;
+}
+
+// 특정 사용자(U…)에게 텍스트 DM 전송
+async function slackDmText(userId, text) {
+  const { SLACK_BOT_TOKEN } = process.env;
+  if (!SLACK_BOT_TOKEN) throw new Error("SLACK_BOT_TOKEN(.env) 미설정");
+  let channelId = userId;
+  if (/^U/i.test(userId)) {
+    const o = await (await fetch("https://slack.com/api/conversations.open", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ users: userId }),
+    })).json();
+    if (!o.ok) throw new Error("DM 열기 오류: " + o.error + " (봇 im:write 권한 필요)");
+    channelId = o.channel.id;
+  }
+  const r = await (await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ channel: channelId, text }),
+  })).json();
+  if (!r.ok) throw new Error("Slack 메시지 오류: " + r.error);
+  return r;
+}
+
+// 상담 → 알림 메시지(유입경로·시각·첫 문의 미리보기·링크)
+async function amudoAlertText(c) {
+  const medium = c.source?.medium?.mediumType;
+  const inflow = medium === "phone" ? "전화" : c.source?.appMessenger?.mediumType === "appKakao" ? "카카오" : "채팅";
+  const url = c.channelId ? `https://desk.channel.io/#/channels/${c.channelId}/user_chats/${c.id}` : "";
+  const when = new Date(c.createdAt ?? Date.now()).toLocaleString("ko-KR");
+  let preview = "";
+  try {
+    const m = await chFetch(`/user-chats/${c.id}/messages`, { limit: 5, sortOrder: "asc" });
+    const first = (m.messages ?? []).find((x) => x.personType === "user" && x.plainText);
+    if (first) preview = "\n💬 " + first.plainText.replace(/\s+/g, " ").trim().slice(0, 120);
+  } catch {}
+  return `🔔 *아무도없개 새 상담*\n• 매장/고객: ${c.name || "(이름 없음)"}\n• 유입: ${inflow}\n• 시각: ${when}${preview}${url ? `\n🔗 ${url}` : ""}`;
+}
+
+async function checkAmudoAlerts() {
+  const recipient = process.env.AMUDO_ALERT_SLACK;
+  const { key, secret } = chKeys();
+  if (!recipient || !key || !secret) return;
+  const stored = (await readJson(AMUDO_JSON)) || { ids: [], seeded: false };
+  const seen = new Set(stored.ids);
+
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  const opened = await chListUserChats("opened");
+  const closed = await chListUserChats("closed", dayAgo); // 빠르게 닫힌 문의 대비
+  const uniq = new Map();
+  for (const c of [...opened, ...closed]) if (!uniq.has(c.id)) uniq.set(c.id, c);
+  const amudo = [...uniq.values()].filter(isAmudoChat);
+
+  if (!stored.seeded) {
+    for (const c of amudo) seen.add(c.id); // 첫 실행: 기존분은 알림 없이 '본 것' 처리
+    await writeFile(AMUDO_JSON, JSON.stringify({ ids: [...seen].slice(-8000), seeded: true }));
+    console.log(`🔔 아무도없개 알림 초기화(${seen.size}건 시드 · 앞으로 신규만 전송)`);
+    return;
+  }
+
+  const now = Date.now();
+  const fresh = amudo
+    .filter((c) => !seen.has(c.id) && (c.createdAt ?? 0) >= now - 6 * 3600 * 1000)
+    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  for (const c of fresh) {
+    try {
+      await slackDmText(recipient, await amudoAlertText(c));
+      console.log(`🔔 아무도없개 알림 전송: ${c.name}`);
+    } catch (e) {
+      console.error("아무도없개 알림 실패:", String(e?.message ?? e));
+    }
+    seen.add(c.id); // 실패해도 재전송 폭주 막게 seen 처리
+  }
+  if (fresh.length) await writeFile(AMUDO_JSON, JSON.stringify({ ids: [...seen].slice(-8000), seeded: true }));
+}
+
+function scheduleAmudoAlerts() {
+  if (!process.env.AMUDO_ALERT_SLACK) {
+    console.log("ℹ️ AMUDO_ALERT_SLACK 미설정 — 아무도없개 슬랙 알림 비활성");
+    return;
+  }
+  const run = () => checkAmudoAlerts().catch((e) => console.error("아무도없개 알림 폴링 오류:", String(e?.message ?? e)));
+  run(); // 가동 시 1회(시드)
+  setInterval(run, 3 * 60 * 1000); // 3분마다
+  console.log("🔔 아무도없개 새 상담 슬랙 알림 폴링 시작(3분 간격)");
+}
+
+// 알림 연결 테스트: 수신자에게 테스트 DM 즉시 전송
+app.post("/api/amudo-alert/test", async (_req, res) => {
+  try {
+    const recipient = process.env.AMUDO_ALERT_SLACK;
+    if (!recipient) return res.status(400).json({ error: "AMUDO_ALERT_SLACK(.env)를 먼저 설정하세요." });
+    await slackDmText(recipient, "🔔 아무도없개 알림 테스트 — 이 메시지가 보이면 정상 연결된 것입니다.");
+    res.json({ ok: true, recipient });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 app.get("/api/worklog/pdf", async (req, res) => {
   try {
     const date = req.query.date ? String(req.query.date) : (await listWorklogDates())[0];
@@ -2650,4 +2760,6 @@ app.listen(Number(BFF_PORT), () => {
   catchUpWorklog();
   // 데이터 동기화: 매일 08:00 자동 수집(코밴·다우데이타 거래·무실적)
   scheduleDailyCollect();
+  // 아무도없개 새 상담 → 슬랙 DM 알림(3분 폴링)
+  scheduleAmudoAlerts();
 });
