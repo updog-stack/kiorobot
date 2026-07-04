@@ -86,14 +86,14 @@ const TZ = "Asia/Seoul";
 const SOURCES = [
   {
     name: "장비매출",
-    dataSourceId: "42f364ab-cc7f-83b0-ab41-8747348eaa89",
+    dataSourceId: "1bba252e-5579-8267-8d1e-07a5ab6009e6",
     dateProp: "날짜",
     amountProp: "총액(VAT 포함)",
     scale: 1, // 원 단위 (구분별 분포 검증: 기타·라이선스·장비매출 모두 원)
   },
   {
     name: "할부/렌탈",
-    dataSourceId: "b43364ab-cc7f-82c9-9f32-07a6072d2560",
+    dataSourceId: "9b5a252e-5579-8375-9f13-879db4849f80",
     dateProp: "할부일(신청일)",
     amountProp: "정산금액(VAT포함)",
     scale: 1,
