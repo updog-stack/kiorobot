@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect } from "react";
-import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan } from "../lib/tr";
+import { useMemo, useState, useEffect, type CSSProperties } from "react";
+import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries } from "../lib/tr";
 import { kicc as kiccSeries, cms as cmsSeries } from "../lib/overview";
 import { won, growth } from "../lib/format";
 
@@ -153,6 +153,8 @@ export function TrMetrics() {
         <div className="table-meta">※ KICC는 자동수집 대상이 아니며 구글시트 참고값(정적)입니다.</div>
       )}
 
+      <TrTrend series={data.series} />
+
       <CmsSection />
     </div>
   );
@@ -180,6 +182,100 @@ function Chart({ monthly }: { monthly: TrMonth[] }) {
         );
       })}
     </div>
+  );
+}
+
+// 2025년~ 월별 결제 추이 — 건수(코밴+다우 스택) + 금액(다우) · 자동수집
+function TrTrend({ series }: { series?: TrSeries }) {
+  if (!series || !series.months.length) return null;
+  const { months, kovanCount, ddwmCount, totalCount, ddwmAmount } = series;
+  const maxCnt = Math.max(1, ...totalCount);
+  const maxAmt = Math.max(1, ...ddwmAmount);
+  const eok = (w: number) => `${(w / 1e8).toFixed(1)}억`;
+  const yearTotal = (arr: number[], pfx: string) =>
+    months.reduce((s, ym, i) => (ym.startsWith(pfx) ? s + arr[i] : s), 0);
+  const lastYm = months[months.length - 1];
+  const curY = lastYm.slice(0, 4);
+  const barCol = (h: number, bg: string, extra: CSSProperties = {}) => (
+    <div style={{ height: `${h}%`, background: bg, ...extra }} />
+  );
+  const xlabel = (ym: string) => {
+    const [y, m] = ym.split("-");
+    return m === "01" ? `${y.slice(2)}.${Number(m)}` : String(Number(m));
+  };
+
+  return (
+    <>
+      <div className="ov__sec-h" style={{ marginTop: 8 }}>
+        <h2>월별 결제 추이 (2025년~)</h2>
+        <span>코밴·다우데이타 · 자동수집</span>
+      </div>
+
+      <div className="sales__kpis">
+        <section className="metric">
+          <div className="metric__label">{curY} 결제 건수</div>
+          <div className="metric__amount">{cnt(yearTotal(totalCount, curY))}</div>
+          <div className="metric__hint">코밴+다우 · 올해 누적</div>
+        </section>
+        <section className="metric">
+          <div className="metric__label">{curY} 결제 금액(다우)</div>
+          <div className="metric__amount">{won(yearTotal(ddwmAmount, curY))}</div>
+          <div className="metric__hint">다우데이타 · 올해 누적</div>
+        </section>
+        <section className="metric">
+          <div className="metric__label">2025 결제 금액(다우)</div>
+          <div className="metric__amount">{won(yearTotal(ddwmAmount, "2025"))}</div>
+          <div className="metric__hint">다우데이타 · 작년 전체</div>
+        </section>
+      </div>
+
+      {/* 건수 — 코밴 + 다우 스택 */}
+      <section className="card card--wide">
+        <h2 className="card__title">월별 결제 건수 — 코밴 + 다우데이타</h2>
+        <div className="chart">
+          {months.map((ym, i) => (
+            <div className="chart__col" key={ym}>
+              <div
+                className="chart__bars"
+                style={{ gap: 0 }}
+                title={`${ym}: 합계 ${totalCount[i].toLocaleString()}건 (코밴 ${kovanCount[i].toLocaleString()} · 다우 ${ddwmCount[i].toLocaleString()})`}
+              >
+                <div style={{ width: "64%", maxWidth: 22, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  {barCol((ddwmCount[i] / maxCnt) * 100, "#4dd0c4", { borderRadius: "4px 4px 0 0" })}
+                  {barCol((kovanCount[i] / maxCnt) * 100, "#7c6df2")}
+                </div>
+              </div>
+              <div className="chart__xlabel">{xlabel(ym)}</div>
+            </div>
+          ))}
+        </div>
+        <div className="chart__legend">
+          <span><i className="dot" style={{ background: "#7c6df2" }} /> 코밴</span>
+          <span><i className="dot" style={{ background: "#4dd0c4" }} /> 다우데이타</span>
+        </div>
+      </section>
+
+      {/* 금액 — 다우만 */}
+      <section className="card card--wide">
+        <h2 className="card__title">
+          월별 결제 금액 — 다우데이타{" "}
+          <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}>(코밴은 포털에서 금액 미제공)</span>
+        </h2>
+        <div className="chart">
+          {months.map((ym, i) => (
+            <div className="chart__col" key={ym}>
+              <div className="chart__bars" style={{ gap: 0 }} title={`${ym}: ${ddwmAmount[i].toLocaleString()}원`}>
+                <div style={{ width: "64%", maxWidth: 22, height: `${(ddwmAmount[i] / maxAmt) * 100}%`, background: "#f59e0b", borderRadius: "4px 4px 0 0" }} title={`${eok(ddwmAmount[i])}원`} />
+              </div>
+              <div className="chart__xlabel">{xlabel(ym)}</div>
+            </div>
+          ))}
+        </div>
+        <div className="chart__legend">
+          <span><i className="dot" style={{ background: "#f59e0b" }} /> 다우 결제금액(원)</span>
+        </div>
+      </section>
+    </>
   );
 }
 

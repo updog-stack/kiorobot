@@ -265,30 +265,56 @@ app.get("/api/sales", async (_req, res) => {
   }
 });
 
-// 거래(TR) 현황 — 코밴 + 다우데이타 VAN별 + 합산(월별 건수)
+// 거래(TR) 현황 — 코밴 + 다우데이타 VAN별 + 합산(월별 건수) + 다년도 시리즈(건수·다우금액)
 async function buildTr() {
   const kovan = await readJson(TR_JSON);
   const ddwm = await readJson(TR_DDWM_JSON);
-  const year = kovan?.year ?? ddwm?.year ?? new Date().getFullYear();
 
+  // 다년도 shape 지원(구버전 single-year fallback)
+  const yearsOf = (d) => {
+    if (!d) return {};
+    if (d.years) return d.years;
+    if (d.year && d.monthly) return { [d.year]: { monthly: d.monthly, total: d.total, avg: d.avg } };
+    return {};
+  };
+  const kY = yearsOf(kovan), dY = yearsOf(ddwm);
+  const allYears = [...new Set([...Object.keys(kY), ...Object.keys(dY)].map(Number))].sort((a, b) => a - b);
+  const curYear = new Date().getFullYear();
+  const year = allYears.includes(curYear) ? curYear : (allYears[allYears.length - 1] ?? curYear);
+
+  // 기존 거래현황 탭: 선택 연도의 VAN별 월별 건수
   const vans = [];
-  if (kovan)
-    vans.push({ van: "KOVAN", label: "코밴", monthly: kovan.monthly ?? [], total: kovan.total ?? 0, avg: kovan.avg ?? 0, updatedAt: kovan.updatedAt ?? null });
-  if (ddwm)
-    vans.push({ van: "DAOUDATA", label: "다우데이타", monthly: ddwm.monthly ?? [], total: ddwm.total ?? 0, avg: ddwm.avg ?? 0, updatedAt: ddwm.updatedAt ?? null });
+  const kCur = kY[year], dCur = dY[year];
+  if (kCur) vans.push({ van: "KOVAN", label: "코밴", monthly: kCur.monthly ?? [], total: kCur.total ?? 0, avg: kCur.avg ?? 0, updatedAt: kovan?.updatedAt ?? null });
+  if (dCur) vans.push({ van: "DAOUDATA", label: "다우데이타", monthly: (dCur.monthly ?? []).map((m) => ({ month: m.month, count: m.count })), total: dCur.total ?? 0, avg: dCur.avg ?? 0, updatedAt: ddwm?.updatedAt ?? null });
 
   const map = {};
   for (const v of vans) for (const m of v.monthly) map[m.month] = (map[m.month] ?? 0) + m.count;
   const months = Object.keys(map).map(Number).sort((a, b) => a - b);
   const combinedMonthly = months.map((m) => ({ month: m, count: map[m] }));
   const combinedTotal = combinedMonthly.reduce((s, x) => s + x.count, 0);
-  const monthsElapsed = months.length;
+
+  // 다년도 월별 시리즈(2025~) — 그래프용. 건수(코밴/다우/합산) + 다우 금액.
+  const labels = [], kovanCount = [], ddwmCount = [], totalCount = [], ddwmAmount = [];
+  for (const y of allYears.filter((y) => y >= 2025)) {
+    const km = new Map((kY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
+    const dmC = new Map((dY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
+    const dmA = new Map((dY[y]?.monthly ?? []).map((m) => [m.month, m.amount ?? 0]));
+    const mset = [...new Set([...km.keys(), ...dmC.keys()])].sort((a, b) => a - b);
+    for (const m of mset) {
+      labels.push(`${y}-${String(m).padStart(2, "0")}`);
+      const kc = km.get(m) ?? 0, dc = dmC.get(m) ?? 0;
+      kovanCount.push(kc); ddwmCount.push(dc); totalCount.push(kc + dc); ddwmAmount.push(dmA.get(m) ?? 0);
+    }
+  }
 
   return {
-    updatedAt: vans.map((v) => v.updatedAt).filter(Boolean).sort().pop() ?? null,
+    updatedAt: [kovan?.updatedAt, ddwm?.updatedAt].filter(Boolean).sort().pop() ?? null,
     year,
+    years: allYears,
     vans,
-    combined: { monthly: combinedMonthly, total: combinedTotal, avg: monthsElapsed ? combinedTotal / monthsElapsed : 0 },
+    combined: { monthly: combinedMonthly, total: combinedTotal, avg: months.length ? combinedTotal / months.length : 0 },
+    series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount },
     note: vans.length ? undefined : "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동 수집 후 표시됩니다.",
   };
 }

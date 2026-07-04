@@ -14,11 +14,22 @@ export interface TrVan {
   updatedAt: string | null;
 }
 
+/** 2025년~ 다년도 월별 시리즈 — 건수(코밴/다우/합산) + 다우 금액(코밴 금액은 포털 미제공) */
+export interface TrSeries {
+  months: string[]; // "2025-01" … 시간순
+  kovanCount: number[];
+  ddwmCount: number[];
+  totalCount: number[];
+  ddwmAmount: number[]; // 원
+}
+
 export interface TrData {
   updatedAt: string | null;
   year: number;
+  years?: number[];
   vans: TrVan[];
   combined: { monthly: TrMonth[]; total: number; avg: number };
+  series?: TrSeries;
   note?: string;
   syncWarning?: string;
 }

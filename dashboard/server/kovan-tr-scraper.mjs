@@ -12,6 +12,7 @@
 
 import "dotenv/config";
 import { chromium } from "playwright";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -53,11 +54,13 @@ async function login(page) {
 // 월별 모드로 한 해를 조회 → 대리점코드 행의 월별 건수 + 총합 반환
 async function queryYear(page, year) {
   await page.goto(TR_URL, { waitUntil: "networkidle", timeout: 30000 });
+  await page.waitForSelector("#ard2", { timeout: 15000 });
   await page.waitForTimeout(800);
 
-  // '월별' 라디오 (자동 postback 여유)
+  // '월별' 라디오 → 자동 postback 완료까지 대기
   await page.check("#ard2").catch(() => {});
-  await page.waitForTimeout(500);
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(800);
   await page.selectOption("#TranList", KOVAN_TRAN).catch(() => {});
   await page.waitForTimeout(400);
   await page.selectOption("#YearList", String(year)).catch(() => {});
@@ -69,7 +72,12 @@ async function queryYear(page, year) {
     page.waitForLoadState("networkidle").catch(() => {}),
     page.click("#btnFind"),
   ]);
-  await page.waitForTimeout(1200);
+  // 결과 그리드가 실제로 채워질 때까지 대기(고정시간 대신 요소 대기)
+  await page.waitForFunction(() => {
+    const t = document.getElementById("GridView1");
+    return t && t.rows && t.rows.length >= 2;
+  }, { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(500);
 
   // #GridView1: 모든 대리점 행(A25700 + 하위 A25701 …)을 월별로 합산 = 총합
   const parsed = await page.evaluate(() => {
@@ -96,36 +104,47 @@ async function queryYear(page, year) {
   return parsed.months.map((x) => ({ month: x.month, count: x.count }));
 }
 
+// 대상 연도: 인자 또는 KOVAN_YEARS(콤마구분). 미지정 시 올해만.
+function targetYears() {
+  const arg = process.argv[2] || process.env.KOVAN_YEARS || "";
+  const ys = arg.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => n >= 2020 && n <= 2100);
+  return ys.length ? [...new Set(ys)].sort() : [new Date().getFullYear()];
+}
+
 async function main() {
   const now = new Date();
-  const year = now.getFullYear();
+  const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
+  const years = targetYears();
+
+  // 기존 데이터 병합(지정 안 한 연도 보존)
+  let store = { agency: KOVAN_AGENCY, years: {} };
+  try {
+    const prev = JSON.parse(readFileSync(OUT, "utf8"));
+    if (prev.years) store.years = prev.years;
+    else if (prev.year && prev.monthly) store.years[prev.year] = { monthly: prev.monthly, total: prev.total, avg: prev.avg };
+  } catch {}
 
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   try {
     await login(page);
-    const all = await queryYear(page, year);
-    // 올해 1월~현재월만
-    const monthly = all.filter((m) => m.month >= 1 && m.month <= curMonth);
-    const total = monthly.reduce((s, x) => s + x.count, 0);
-    const avg = monthly.length ? total / monthly.length : 0;
+    for (const year of years) {
+      const all = await queryYear(page, year);
+      const lastMonth = year < curYear ? 12 : year === curYear ? curMonth : 0;
+      const monthly = all.filter((m) => m.month >= 1 && m.month <= lastMonth);
+      const total = monthly.reduce((s, x) => s + x.count, 0);
+      const avg = monthly.length ? total / monthly.length : 0;
+      monthly.forEach((m) => console.log(`  ${year}-${String(m.month).padStart(2, "0")}: ${m.count.toLocaleString()}건`));
+      store.years[year] = { monthly, total, avg };
+      console.log(`✅ ${year}: 총 ${total.toLocaleString()}건`);
+    }
 
-    monthly.forEach((m) =>
-      console.log(`  ${year}-${String(m.month).padStart(2, "0")}: ${m.count.toLocaleString()}건`)
-    );
-
+    store.updatedAt = now.toISOString();
     await mkdir(dirname(OUT), { recursive: true });
-    await writeFile(
-      OUT,
-      JSON.stringify(
-        { updatedAt: now.toISOString(), agency: KOVAN_AGENCY, year, monthly, total, avg },
-        null,
-        2
-      )
-    );
-    console.log(`✅ 저장: ${OUT} (총 ${total.toLocaleString()}건, 월평균 ${Math.round(avg).toLocaleString()}건)`);
+    await writeFile(OUT, JSON.stringify(store, null, 2));
+    console.log(`✅ 저장: ${OUT} (연도: ${Object.keys(store.years).join(", ")})`);
   } finally {
     await browser.close();
   }
