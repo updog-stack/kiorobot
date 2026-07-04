@@ -153,7 +153,7 @@ export function TrMetrics() {
         <div className="table-meta">※ KICC는 자동수집 대상이 아니며 구글시트 참고값(정적)입니다.</div>
       )}
 
-      <TrTrend series={data.series} />
+      <TrTrend series={data.series} years={data.years} />
 
       <CmsSection />
     </div>
@@ -185,67 +185,85 @@ function Chart({ monthly }: { monthly: TrMonth[] }) {
   );
 }
 
-// 2025년~ 월별 결제 추이 — 건수(코밴+다우 스택) + 금액(다우) · 자동수집
-function TrTrend({ series }: { series?: TrSeries }) {
-  if (!series || !series.months.length) return null;
-  const { months, kovanCount, ddwmCount, totalCount, ddwmAmount } = series;
-  const maxCnt = Math.max(1, ...totalCount);
-  const maxAmt = Math.max(1, ...ddwmAmount);
+// 월별 결제 추이 — 년도 선택(1년치) · 건수(코밴+다우 스택) + 금액(다우) · 자동수집·누적
+function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
+  const allYears = useMemo(() => {
+    if (years && years.length) return [...new Set(years)].filter((y) => y >= 2025).sort((a, b) => a - b);
+    if (series) return [...new Set(series.months.map((m) => Number(m.slice(0, 4))))].sort((a, b) => a - b);
+    return [];
+  }, [years, series]);
+  const [selYear, setSelYear] = useState<number | null>(null);
+  const year = selYear ?? (allYears.length ? allYears[allYears.length - 1] : null);
+
+  if (!series || !series.months.length || !year) return null;
+
   const eok = (w: number) => `${(w / 1e8).toFixed(1)}억`;
-  const yearTotal = (arr: number[], pfx: string) =>
-    months.reduce((s, ym, i) => (ym.startsWith(pfx) ? s + arr[i] : s), 0);
-  const lastYm = months[months.length - 1];
-  const curY = lastYm.slice(0, 4);
   const barCol = (h: number, bg: string, extra: CSSProperties = {}) => (
     <div style={{ height: `${h}%`, background: bg, ...extra }} />
   );
-  const xlabel = (ym: string) => {
-    const [y, m] = ym.split("-");
-    return m === "01" ? `${y.slice(2)}.${Number(m)}` : String(Number(m));
-  };
+
+  // 선택 년도만 필터
+  const rows = series.months
+    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kovan: series.kovanCount[i], ddwm: series.ddwmCount[i], total: series.totalCount[i], amt: series.ddwmAmount[i] }))
+    .filter((_, i) => series.months[i].startsWith(`${year}-`));
+  const maxCnt = Math.max(1, ...rows.map((r) => r.total));
+  const maxAmt = Math.max(1, ...rows.map((r) => r.amt));
+  const yTotalCnt = rows.reduce((s, r) => s + r.total, 0);
+  const yKovanCnt = rows.reduce((s, r) => s + r.kovan, 0);
+  const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
+  const yTotalAmt = rows.reduce((s, r) => s + r.amt, 0);
 
   return (
     <>
       <div className="ov__sec-h" style={{ marginTop: 8 }}>
-        <h2>월별 결제 추이 (2025년~)</h2>
-        <span>코밴·다우데이타 · 자동수집</span>
+        <h2>월별 결제 추이</h2>
+        <span>코밴·다우데이타 · 매일 08:00 자동수집·누적</span>
+      </div>
+
+      {/* 좌측 상단 년도 필터 */}
+      <div className="van-tabs">
+        {allYears.map((y) => (
+          <button key={y} className={y === year ? "is-active" : ""} onClick={() => setSelYear(y)}>
+            {y}년
+          </button>
+        ))}
       </div>
 
       <div className="sales__kpis">
         <section className="metric">
-          <div className="metric__label">{curY} 결제 건수</div>
-          <div className="metric__amount">{cnt(yearTotal(totalCount, curY))}</div>
-          <div className="metric__hint">코밴+다우 · 올해 누적</div>
+          <div className="metric__label">{year} 결제 건수</div>
+          <div className="metric__amount">{cnt(yTotalCnt)}</div>
+          <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)}</div>
         </section>
         <section className="metric">
-          <div className="metric__label">{curY} 결제 금액(다우)</div>
-          <div className="metric__amount">{won(yearTotal(ddwmAmount, curY))}</div>
-          <div className="metric__hint">다우데이타 · 올해 누적</div>
+          <div className="metric__label">{year} 결제 금액(다우)</div>
+          <div className="metric__amount">{won(yTotalAmt)}</div>
+          <div className="metric__hint">다우데이타 · {rows.length}개월</div>
         </section>
         <section className="metric">
-          <div className="metric__label">2025 결제 금액(다우)</div>
-          <div className="metric__amount">{won(yearTotal(ddwmAmount, "2025"))}</div>
-          <div className="metric__hint">다우데이타 · 작년 전체</div>
+          <div className="metric__label">월 평균 금액(다우)</div>
+          <div className="metric__amount">{won(rows.length ? yTotalAmt / rows.length : 0)}</div>
+          <div className="metric__hint">{year}년 {rows.length}개월 평균</div>
         </section>
       </div>
 
       {/* 건수 — 코밴 + 다우 스택 */}
       <section className="card card--wide">
-        <h2 className="card__title">월별 결제 건수 — 코밴 + 다우데이타</h2>
+        <h2 className="card__title">{year}년 월별 결제 건수 — 코밴 + 다우데이타</h2>
         <div className="chart">
-          {months.map((ym, i) => (
-            <div className="chart__col" key={ym}>
+          {rows.map((r) => (
+            <div className="chart__col" key={r.m}>
               <div
                 className="chart__bars"
                 style={{ gap: 0 }}
-                title={`${ym}: 합계 ${totalCount[i].toLocaleString()}건 (코밴 ${kovanCount[i].toLocaleString()} · 다우 ${ddwmCount[i].toLocaleString()})`}
+                title={`${r.m}월: 합계 ${r.total.toLocaleString()}건 (코밴 ${r.kovan.toLocaleString()} · 다우 ${r.ddwm.toLocaleString()})`}
               >
-                <div style={{ width: "64%", maxWidth: 22, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-                  {barCol((ddwmCount[i] / maxCnt) * 100, "#4dd0c4", { borderRadius: "4px 4px 0 0" })}
-                  {barCol((kovanCount[i] / maxCnt) * 100, "#7c6df2")}
+                <div style={{ width: "58%", maxWidth: 28, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  {barCol((r.ddwm / maxCnt) * 100, "#4dd0c4", { borderRadius: "4px 4px 0 0" })}
+                  {barCol((r.kovan / maxCnt) * 100, "#7c6df2")}
                 </div>
               </div>
-              <div className="chart__xlabel">{xlabel(ym)}</div>
+              <div className="chart__xlabel">{r.m}월</div>
             </div>
           ))}
         </div>
@@ -258,16 +276,16 @@ function TrTrend({ series }: { series?: TrSeries }) {
       {/* 금액 — 다우만 */}
       <section className="card card--wide">
         <h2 className="card__title">
-          월별 결제 금액 — 다우데이타{" "}
+          {year}년 월별 결제 금액 — 다우데이타{" "}
           <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}>(코밴은 포털에서 금액 미제공)</span>
         </h2>
         <div className="chart">
-          {months.map((ym, i) => (
-            <div className="chart__col" key={ym}>
-              <div className="chart__bars" style={{ gap: 0 }} title={`${ym}: ${ddwmAmount[i].toLocaleString()}원`}>
-                <div style={{ width: "64%", maxWidth: 22, height: `${(ddwmAmount[i] / maxAmt) * 100}%`, background: "#f59e0b", borderRadius: "4px 4px 0 0" }} title={`${eok(ddwmAmount[i])}원`} />
+          {rows.map((r) => (
+            <div className="chart__col" key={r.m}>
+              <div className="chart__bars" style={{ gap: 0 }} title={`${r.m}월: ${r.amt.toLocaleString()}원`}>
+                <div style={{ width: "58%", maxWidth: 28, height: `${(r.amt / maxAmt) * 100}%`, background: "#f59e0b", borderRadius: "4px 4px 0 0" }} title={`${eok(r.amt)}원`} />
               </div>
-              <div className="chart__xlabel">{xlabel(ym)}</div>
+              <div className="chart__xlabel">{r.m}월</div>
             </div>
           ))}
         </div>
