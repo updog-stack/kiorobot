@@ -15,12 +15,6 @@ import {
   daou,
   kovan,
   kicc,
-  contentPubs,
-  newCard,
-  license,
-  reinstall,
-  newBiz,
-  closedBiz,
 } from "../lib/overview";
 
 // 단위 인지 포매터
@@ -181,11 +175,6 @@ function SecHead({ title, note }: { title: string; note?: string }) {
 const YT_VIEWS: Mseries = { key: "ytviews", label: "유튜브 조회수", unit: "views", sample: false, cur: [], prev: [] };
 
 export function Overview() {
-  // 사업자 순증 (신규 - 폐업)
-  const nb = ytd(newBiz);
-  const cb = ytd(closedBiz);
-  const netNew = { cur: nb.cur - cb.cur, prev: nb.prev - cb.prev };
-
   // 유튜브 채널 지표(실데이터)
   const [yt, setYt] = useState<YoutubeStats | null>(null);
   useEffect(() => {
@@ -221,16 +210,6 @@ export function Overview() {
                 : "유튜브 불러오는 중…"
             }
           />
-          <Kpi
-            icon="🏢"
-            series={newBiz}
-            override={{
-              cur: netNew.cur,
-              prev: netNew.prev,
-              value: `순증 ${netNew.cur.toLocaleString("ko-KR")}건`,
-            }}
-            hint={`신규 ${nb.cur.toLocaleString("ko-KR")} · 폐업 ${cb.cur.toLocaleString("ko-KR")} (상반기)`}
-          />
         </div>
       </section>
 
@@ -240,11 +219,6 @@ export function Overview() {
         <div className="ov__charts">
           <YoYChart series={equipment} />
           <YoYChart series={cms} />
-        </div>
-        <div className="ov__row">
-          <Kpi icon="🆕" series={newCard} hint="신규 카드가맹 매출 (누적)" />
-          <Kpi icon="🔑" series={license} hint="라이센스 매출 (누적)" />
-          <Kpi icon="📦" series={reinstall} hint="이전설치 매출 (누적)" />
         </div>
       </section>
 
@@ -259,35 +233,10 @@ export function Overview() {
         <YoYChart series={van} />
       </section>
 
-      {/* ===== 콘텐츠 · 유튜브 ===== */}
+      {/* ===== 유튜브 ===== */}
       <section className="ov__sec">
-        <SecHead title="콘텐츠 · 유튜브" note="콘텐츠 발행 · 유튜브 채널" />
-        <div className="ov__row">
-          <Kpi icon="✍️" series={contentPubs} hint="콘텐츠 발행 건수 (누적)" />
-        </div>
+        <SecHead title="유튜브" note="유튜브 채널 지표" />
         <YoutubeCard />
-      </section>
-
-      {/* ===== 사업자 현황 ===== */}
-      <section className="ov__sec">
-        <SecHead title="사업자 현황" note="상반기 신규 vs 폐업" />
-        <section className="card card--wide">
-          <div className="ov__chart-head">
-            <h2 className="card__title">신규 · 폐업 사업자 — 월별</h2>
-            <span className="metric__badge metric__badge--up">
-              순증 +{netNew.cur.toLocaleString("ko-KR")}건
-            </span>
-          </div>
-          <MonthBars
-            cur={newBiz.cur}
-            prev={closedBiz.cur}
-            unit="count"
-            colorCur="#10b981"
-            colorPrev="#ef4444"
-            labelCur="신규 사업자"
-            labelPrev="폐업 사업자"
-          />
-        </section>
       </section>
     </div>
   );
