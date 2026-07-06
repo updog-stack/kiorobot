@@ -1341,6 +1341,52 @@
   margin-bottom: 6px;
 }
 
+/* 총매출 구분(장비/라이선스/기타) 체크박스 선택기 */
+.ov__cat-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 12px;
+}
+.ov__cat-picker-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted, #64748b);
+  margin-right: 2px;
+}
+.ov__cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted, #64748b);
+  background: var(--card, #fff);
+  transition: all 0.12s;
+}
+.ov__cat input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--brand, #2563eb);
+}
+.ov__cat--on {
+  color: var(--brand, #2563eb);
+  border-color: var(--brand, #2563eb);
+  background: color-mix(in srgb, var(--brand, #2563eb) 10%, transparent);
+}
+.ov__cat-sel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  margin-left: auto;
+}
+
 .ov__sample-tag {
   font-size: 10px;
   font-weight: 700;

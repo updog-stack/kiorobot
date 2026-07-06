@@ -3,7 +3,7 @@ import { won, growth } from "../lib/format";
 import { YoutubeCard } from "./YoutubeCard";
 import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
 import { fetchCms } from "../lib/cms";
-import { fetchSalesMonthly } from "../lib/sales";
+import { fetchSalesMonthly, type SalesMonthly } from "../lib/sales";
 import {
   YEAR,
   PREV_YEAR,
@@ -11,7 +11,10 @@ import {
   fmtCount,
   type Mseries,
   type Unit,
-  equipment,
+  totalSales,
+  SALES_2025,
+  SALES_CATS,
+  sumCats,
   cms,
   van,
   daou,
@@ -164,6 +167,58 @@ function YoYChart({ series }: { series: Mseries }) {
   );
 }
 
+// 총 매출 차트 — 구분(장비/라이선스/기타) 체크박스로 선택해 비교
+function TotalSalesChart({
+  curByCat,
+  lastMonth,
+}: {
+  curByCat: Record<string, number[]> | null;
+  lastMonth: number;
+}) {
+  const [sel, setSel] = useState<Set<string>>(() => new Set(SALES_CATS));
+  const toggle = (c: string) =>
+    setSel((prev) => {
+      const n = new Set(prev);
+      if (n.has(c)) n.delete(c);
+      else n.add(c);
+      return n.size ? n : prev; // 최소 1개는 유지
+    });
+  const cats = SALES_CATS.filter((c) => sel.has(c));
+  const cur = curByCat && lastMonth > 0 ? sumCats(curByCat, cats, lastMonth) : [];
+  const prev = sumCats(SALES_2025, cats, 12);
+  const series: Mseries = { key: "total", label: "총 매출", unit: "won", sample: false, cur, prev };
+  const y = ytd(series);
+  const g = growth(y.cur, y.prev);
+  const allOn = cats.length === SALES_CATS.length;
+  return (
+    <section className="card card--wide">
+      <div className="ov__chart-head">
+        <h2 className="card__title">총 매출 — 월별 추이</h2>
+        <span className={`metric__badge metric__badge--${g.tone}`}>
+          {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
+        </span>
+      </div>
+      <div className="ov__cat-picker">
+        <span className="ov__cat-picker-label">구분</span>
+        {SALES_CATS.map((c) => (
+          <label key={c} className={`ov__cat${sel.has(c) ? " ov__cat--on" : ""}`}>
+            <input type="checkbox" checked={sel.has(c)} onChange={() => toggle(c)} />
+            {c}
+          </label>
+        ))}
+        <span className="ov__cat-sel">{allOn ? "전체(총매출)" : cats.join(" + ")}</span>
+      </div>
+      <MonthBars
+        cur={series.cur}
+        prev={series.prev}
+        unit="won"
+        labelCur={`${YEAR}년`}
+        labelPrev={`${PREV_YEAR}년`}
+      />
+    </section>
+  );
+}
+
 function SecHead({ title, note }: { title: string; note?: string }) {
   return (
     <div className="ov__sec-h">
@@ -193,29 +248,30 @@ export function Overview() {
       .catch(() => {});
   }, []);
 
-  // 장비 매출(노션 장비매출 DB 실데이터) — 작년치는 노션에 없으면 기존 값 유지
-  const [equipView, setEquipView] = useState<Mseries>(equipment);
+  // 총 매출(노션 장비매출 DB, 구분별 실데이터)
+  const [sales, setSales] = useState<SalesMonthly | null>(null);
   useEffect(() => {
-    fetchSalesMonthly()
-      .then((d) => {
-        if (d.cur?.length)
-          setEquipView({ ...equipment, sample: false, cur: d.cur, prev: d.prev?.length ? d.prev : equipment.prev });
-      })
-      .catch(() => {});
+    fetchSalesMonthly().then(setSales).catch(() => {});
   }, []);
+  // 핵심요약 KPI: 전체(장비+라이선스+기타) 총매출
+  const totalCur =
+    sales && sales.lastMonth > 0
+      ? sumCats(sales.curByCat, SALES_CATS, sales.lastMonth)
+      : totalSales.cur;
+  const totalSeries: Mseries = { ...totalSales, cur: totalCur };
 
   return (
     <div className="ov">
       <div className="ov__banner">
         대표님 경영 의사결정용 핵심 지표 요약 · {YEAR}년 vs {PREV_YEAR}년 동기 비교
-        <span>· 장비/CMS/VAN은 실데이터 예시, “샘플” 표시 지표는 임의 데이터</span>
+        <span>· 총매출/CMS/VAN은 실데이터, “샘플” 표시 지표는 임의 데이터</span>
       </div>
 
       {/* ===== 핵심 요약 ===== */}
       <section className="ov__sec">
         <SecHead title="핵심 요약" note="올해 누적(YTD) · 작년 동기간 대비" />
         <div className="ov__row">
-          <Kpi icon="🖥️" series={equipView} />
+          <Kpi icon="💰" series={totalSeries} hint="장비+라이선스+기타 · 올해 누적 · 작년 동기 대비" />
           <Kpi icon="💳" series={cmsView} />
           <Kpi icon="🔁" series={van} />
           <Kpi
@@ -238,9 +294,9 @@ export function Overview() {
 
       {/* ===== 매출 ===== */}
       <section className="ov__sec">
-        <SecHead title="매출 현황" note="장비 · CMS · 매출 구성" />
+        <SecHead title="매출 현황" note="총매출(장비·라이선스·기타) · CMS" />
         <div className="ov__charts">
-          <YoYChart series={equipView} />
+          <TotalSalesChart curByCat={sales?.curByCat ?? null} lastMonth={sales?.lastMonth ?? 0} />
           <YoYChart series={cmsView} />
         </div>
       </section>

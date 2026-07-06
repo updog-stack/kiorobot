@@ -265,25 +265,36 @@ app.get("/api/sales", async (_req, res) => {
   }
 });
 
-// '장비 매출' 카드/그래프용 — 장비매출 DB(장비/라이선스/기타) 월별 합산(올해/작년).
+// '총 매출' 카드/그래프용 — 장비매출 DB를 구분(장비/라이선스/기타)별로 올해 월별 집계.
+// 작년(2025)은 노션에 없어 프론트 정적값(시트 이미지) 사용. 라이선스/기타 2026은 아직 미동기화(0).
+const SALES_CAT = (g) => /장비/.test(g) ? "장비" : /라이[선센]스/.test(g) ? "라이선스" : "기타";
 let salesMonthlyCache = { at: 0, data: null };
 async function buildSalesMonthly() {
-  const recs = await loadSource(SOURCES[0]); // 장비매출 DB(1bba252e)
-  const byYm = {};
-  for (const r of recs) { const ym = r.date.slice(0, 7); byYm[ym] = (byYm[ym] ?? 0) + r.amount; }
+  const src = SOURCES[0]; // 장비매출 DB(1bba252e)
   const now = new Date();
-  const curYear = now.getFullYear(), prevYear = curYear - 1;
-  const monthly = (y) => Array.from({ length: 12 }, (_, i) => byYm[`${y}-${String(i + 1).padStart(2, "0")}`] ?? 0);
-  const full = monthly(curYear);
-  let lastM = 0; for (let i = 0; i < 12; i++) if (full[i] > 0) lastM = i + 1; // 데이터 있는 마지막 달
-  const cur = lastM > 0 ? full.slice(0, lastM) : [];
-  const prevFull = monthly(prevYear);
-  const hasPrev = prevFull.some((v) => v > 0);
+  const curYear = now.getFullYear();
+  const cats = ["장비", "라이선스", "기타"];
+  const curByCat = { 장비: Array(12).fill(0), 라이선스: Array(12).fill(0), 기타: Array(12).fill(0) };
+  let cursor;
+  do {
+    const res = await notion.dataSources.query({ data_source_id: src.dataSourceId, start_cursor: cursor, page_size: 100 });
+    for (const page of res.results) {
+      const props = page.properties ?? {};
+      const date = dateOf(props[src.dateProp]);
+      const amt = numberOf(props[src.amountProp]);
+      if (!date || typeof amt !== "number") continue;
+      const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7));
+      if (y !== curYear || m < 1 || m > 12) continue;
+      curByCat[SALES_CAT(props["구분"]?.select?.name ?? "")][m - 1] += amt * src.scale;
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  const totalByMonth = Array.from({ length: 12 }, (_, i) => cats.reduce((s, c) => s + curByCat[c][i], 0));
+  let lastMonth = 0; for (let i = 0; i < 12; i++) if (totalByMonth[i] > 0) lastMonth = i + 1;
   return {
-    curYear, prevYear, cur,
-    prev: hasPrev ? prevFull : null, // 노션에 작년 데이터 없으면 null → 프론트가 기존 값으로 폴백
+    curYear, prevYear: curYear - 1, categories: cats, curByCat, lastMonth,
     updatedAt: now.toISOString(),
-    source: cur.length ? "노션 장비매출 DB" : "none",
+    source: lastMonth ? "노션 장비매출 DB(구분별)" : "none",
   };
 }
 app.get("/api/sales-monthly", async (_req, res) => {

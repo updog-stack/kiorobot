@@ -13,12 +13,13 @@ export interface SalesRecord {
 
 const USE_MOCK = false;
 
-// 장비 매출(노션 장비매출 DB) 월별 실데이터 — 전체현황 '장비 매출' 카드/그래프용
+// 총 매출(노션 장비매출 DB) 구분별 월별 실데이터 — 전체현황 '총 매출' 카드/그래프용
 export interface SalesMonthly {
   curYear: number;
   prevYear: number;
-  cur: number[] | null; // 올해 월별(데이터 있는 달까지)
-  prev: number[] | null; // 작년 월별(12), 노션에 없으면 null
+  categories: string[]; // ["장비","라이선스","기타"]
+  curByCat: Record<string, number[]>; // 올해 구분별 월별(길이 12)
+  lastMonth: number; // 올해 데이터가 있는 마지막 달(1~12), 없으면 0
   updatedAt: string | null;
   source: string;
 }
