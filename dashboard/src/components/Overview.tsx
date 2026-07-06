@@ -3,6 +3,7 @@ import { won, growth } from "../lib/format";
 import { YoutubeCard } from "./YoutubeCard";
 import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
 import { fetchCms } from "../lib/cms";
+import { fetchSalesMonthly } from "../lib/sales";
 import {
   YEAR,
   PREV_YEAR,
@@ -192,6 +193,17 @@ export function Overview() {
       .catch(() => {});
   }, []);
 
+  // 장비 매출(노션 장비매출 DB 실데이터) — 작년치는 노션에 없으면 기존 값 유지
+  const [equipView, setEquipView] = useState<Mseries>(equipment);
+  useEffect(() => {
+    fetchSalesMonthly()
+      .then((d) => {
+        if (d.cur?.length)
+          setEquipView({ ...equipment, sample: false, cur: d.cur, prev: d.prev?.length ? d.prev : equipment.prev });
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="ov">
       <div className="ov__banner">
@@ -203,7 +215,7 @@ export function Overview() {
       <section className="ov__sec">
         <SecHead title="핵심 요약" note="올해 누적(YTD) · 작년 동기간 대비" />
         <div className="ov__row">
-          <Kpi icon="🖥️" series={equipment} />
+          <Kpi icon="🖥️" series={equipView} />
           <Kpi icon="💳" series={cmsView} />
           <Kpi icon="🔁" series={van} />
           <Kpi
@@ -228,7 +240,7 @@ export function Overview() {
       <section className="ov__sec">
         <SecHead title="매출 현황" note="장비 · CMS · 매출 구성" />
         <div className="ov__charts">
-          <YoYChart series={equipment} />
+          <YoYChart series={equipView} />
           <YoYChart series={cmsView} />
         </div>
       </section>

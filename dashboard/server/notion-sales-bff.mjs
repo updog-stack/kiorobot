@@ -265,6 +265,38 @@ app.get("/api/sales", async (_req, res) => {
   }
 });
 
+// '장비 매출' 카드/그래프용 — 장비매출 DB(장비/라이선스/기타) 월별 합산(올해/작년).
+let salesMonthlyCache = { at: 0, data: null };
+async function buildSalesMonthly() {
+  const recs = await loadSource(SOURCES[0]); // 장비매출 DB(1bba252e)
+  const byYm = {};
+  for (const r of recs) { const ym = r.date.slice(0, 7); byYm[ym] = (byYm[ym] ?? 0) + r.amount; }
+  const now = new Date();
+  const curYear = now.getFullYear(), prevYear = curYear - 1;
+  const monthly = (y) => Array.from({ length: 12 }, (_, i) => byYm[`${y}-${String(i + 1).padStart(2, "0")}`] ?? 0);
+  const full = monthly(curYear);
+  let lastM = 0; for (let i = 0; i < 12; i++) if (full[i] > 0) lastM = i + 1; // 데이터 있는 마지막 달
+  const cur = lastM > 0 ? full.slice(0, lastM) : [];
+  const prevFull = monthly(prevYear);
+  const hasPrev = prevFull.some((v) => v > 0);
+  return {
+    curYear, prevYear, cur,
+    prev: hasPrev ? prevFull : null, // 노션에 작년 데이터 없으면 null → 프론트가 기존 값으로 폴백
+    updatedAt: now.toISOString(),
+    source: cur.length ? "노션 장비매출 DB" : "none",
+  };
+}
+app.get("/api/sales-monthly", async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (!salesMonthlyCache.data || now - salesMonthlyCache.at > TTL_MS) salesMonthlyCache = { at: now, data: await buildSalesMonthly() };
+    res.json(salesMonthlyCache.data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 // 거래(TR) 현황 — 코밴 + 다우데이타 VAN별 + 합산(월별 건수) + 다년도 시리즈(건수·다우금액)
 async function buildTr() {
   const kovan = await readJson(TR_JSON);

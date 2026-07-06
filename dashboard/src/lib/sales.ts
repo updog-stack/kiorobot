@@ -13,6 +13,22 @@ export interface SalesRecord {
 
 const USE_MOCK = false;
 
+// 장비 매출(노션 장비매출 DB) 월별 실데이터 — 전체현황 '장비 매출' 카드/그래프용
+export interface SalesMonthly {
+  curYear: number;
+  prevYear: number;
+  cur: number[] | null; // 올해 월별(데이터 있는 달까지)
+  prev: number[] | null; // 작년 월별(12), 노션에 없으면 null
+  updatedAt: string | null;
+  source: string;
+}
+
+export async function fetchSalesMonthly(): Promise<SalesMonthly> {
+  const r = await fetch("/api/sales-monthly");
+  if (!r.ok) throw new Error("sales-monthly " + r.status);
+  return (await r.json()) as SalesMonthly;
+}
+
 export async function fetchSales(): Promise<SalesRecord[]> {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 250));
