@@ -2170,7 +2170,8 @@ function isAmudoChat(c) {
 }
 
 // 특정 사용자(U…)에게 텍스트 DM 전송
-async function slackDmText(userId, text) {
+const AMUDO_BOT_NAME = "아무도없개_CS기록"; // 알림 DM에 표시될 봇 이름(username override)
+async function slackDmText(userId, text, username) {
   const { SLACK_BOT_TOKEN } = process.env;
   if (!SLACK_BOT_TOKEN) throw new Error("SLACK_BOT_TOKEN(.env) 미설정");
   let channelId = userId;
@@ -2183,10 +2184,12 @@ async function slackDmText(userId, text) {
     if (!o.ok) throw new Error("DM 열기 오류: " + o.error + " (봇 im:write 권한 필요)");
     channelId = o.channel.id;
   }
+  const payload = { channel: channelId, text };
+  if (username) { payload.username = username; payload.icon_emoji = ":bell:"; } // chat:write.customize 권한 필요
   const r = await (await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: { Authorization: "Bearer " + SLACK_BOT_TOKEN, "Content-Type": "application/json" },
-    body: JSON.stringify({ channel: channelId, text }),
+    body: JSON.stringify(payload),
   })).json();
   if (!r.ok) throw new Error("Slack 메시지 오류: " + r.error);
   return r;
@@ -2234,7 +2237,7 @@ async function checkAmudoAlerts() {
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   for (const c of fresh) {
     try {
-      await slackDmText(recipient, await amudoAlertText(c));
+      await slackDmText(recipient, await amudoAlertText(c), AMUDO_BOT_NAME);
       console.log(`🔔 아무도없개 알림 전송: ${c.name}`);
     } catch (e) {
       console.error("아무도없개 알림 실패:", String(e?.message ?? e));
@@ -2260,7 +2263,7 @@ app.post("/api/amudo-alert/test", async (_req, res) => {
   try {
     const recipient = process.env.AMUDO_ALERT_SLACK;
     if (!recipient) return res.status(400).json({ error: "AMUDO_ALERT_SLACK(.env)를 먼저 설정하세요." });
-    await slackDmText(recipient, "🔔 아무도없개 알림 테스트 — 이 메시지가 보이면 정상 연결된 것입니다.");
+    await slackDmText(recipient, "🔔 아무도없개 알림 테스트 — 이 메시지가 보이면 정상 연결된 것입니다.", AMUDO_BOT_NAME);
     res.json({ ok: true, recipient });
   } catch (e) {
     res.status(500).json({ error: String(e?.message ?? e) });
