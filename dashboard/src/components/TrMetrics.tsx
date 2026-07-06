@@ -198,9 +198,16 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   if (!series || !series.months.length || !year) return null;
 
   const eok = (w: number) => `${(w / 1e8).toFixed(1)}억`;
+  // 막대 위 라벨용 축약: 건수=만, 금액=억
+  const cntMan = (n: number) => (n >= 10000 ? `${Math.round(n / 10000).toLocaleString()}만` : n.toLocaleString());
+  const eokShort = (w: number) => {
+    const e = w / 1e8;
+    return `${e >= 10 ? Math.round(e).toLocaleString() : Math.round(e * 10) / 10}억`;
+  };
   const barCol = (h: number, bg: string, extra: CSSProperties = {}) => (
     <div style={{ height: `${h}%`, background: bg, ...extra }} />
   );
+  const valLabel: CSSProperties = { fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 3, whiteSpace: "nowrap", lineHeight: 1 };
 
   // 선택 년도만 필터
   const rows = series.months
@@ -212,6 +219,29 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   const yKovanCnt = rows.reduce((s, r) => s + r.kovan, 0);
   const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
   const yTotalAmt = rows.reduce((s, r) => s + r.amt, 0);
+
+  // 직전 년도 '동기간'(같은 월들) 합계 → 증감률
+  const curMonthNums = rows.map((r) => r.m);
+  const prevYear = year - 1;
+  const prevRows = series.months
+    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), total: series.totalCount[i], amt: series.ddwmAmount[i], ym }))
+    .filter((x) => x.ym.startsWith(`${prevYear}-`) && curMonthNums.includes(x.m));
+  const hasPrev = prevRows.length > 0;
+  const prevCnt = prevRows.reduce((s, r) => s + r.total, 0);
+  const prevAmt = prevRows.reduce((s, r) => s + r.amt, 0);
+  const prevAvg = prevRows.length ? prevAmt / prevRows.length : 0;
+  const gCnt = hasPrev ? growth(yTotalCnt, prevCnt) : null;
+  const gAmt = hasPrev ? growth(yTotalAmt, prevAmt) : null;
+  const gAvg = hasPrev ? growth(rows.length ? yTotalAmt / rows.length : 0, prevAvg) : null;
+  const compare = (g: ReturnType<typeof growth> | null, prevText: string) =>
+    g ? (
+      <div className="metric__compare">
+        <span className={`metric__badge metric__badge--${g.tone}`}>
+          {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
+        </span>
+        <span className="metric__compare-text">{prevYear} 동기간 {prevText}</span>
+      </div>
+    ) : null;
 
   return (
     <>
@@ -233,16 +263,19 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
         <section className="metric">
           <div className="metric__label">{year} 결제 건수</div>
           <div className="metric__amount">{cnt(yTotalCnt)}</div>
+          {compare(gCnt, cnt(prevCnt))}
           <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)}</div>
         </section>
         <section className="metric">
           <div className="metric__label">{year} 결제 금액(다우)</div>
           <div className="metric__amount">{won(yTotalAmt)}</div>
+          {compare(gAmt, won(prevAmt))}
           <div className="metric__hint">다우데이타 · {rows.length}개월</div>
         </section>
         <section className="metric">
           <div className="metric__label">월 평균 금액(다우)</div>
           <div className="metric__amount">{won(rows.length ? yTotalAmt / rows.length : 0)}</div>
+          {compare(gAvg, won(prevAvg))}
           <div className="metric__hint">{year}년 {rows.length}개월 평균</div>
         </section>
       </div>
@@ -253,6 +286,7 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
         <div className="chart">
           {rows.map((r) => (
             <div className="chart__col" key={r.m}>
+              <div style={valLabel}>{cntMan(r.total)}</div>
               <div
                 className="chart__bars"
                 style={{ gap: 0 }}
@@ -282,6 +316,7 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
         <div className="chart">
           {rows.map((r) => (
             <div className="chart__col" key={r.m}>
+              <div style={valLabel}>{eokShort(r.amt)}</div>
               <div className="chart__bars" style={{ gap: 0 }} title={`${r.m}월: ${r.amt.toLocaleString()}원`}>
                 <div style={{ width: "58%", maxWidth: 28, height: `${(r.amt / maxAmt) * 100}%`, background: "#f59e0b", borderRadius: "4px 4px 0 0" }} title={`${eok(r.amt)}원`} />
               </div>
