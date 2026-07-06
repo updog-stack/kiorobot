@@ -323,6 +323,32 @@ app.get("/api/tr", async (_req, res) => {
   res.json(await buildTr());
 });
 
+// CMS 매출(효성CMS 월별 수납/완납액) — hyosung-cms-scraper 수집분
+const CMS_HYOSUNG_JSON = join(__dirname, "data", "cms-hyosung.json");
+async function buildCms() {
+  const d = await readJson(CMS_HYOSUNG_JSON);
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const prevYear = curYear - 1;
+  const paidArr = (y) => {
+    const yr = d?.years?.[String(y)];
+    if (!yr?.monthly?.length) return null;
+    return [...yr.monthly].sort((a, b) => a.month - b.month).map((m) => Number(m.paid) || 0);
+  };
+  const cur = paidArr(curYear);
+  const prev = paidArr(prevYear);
+  return {
+    curYear, prevYear, cur, prev,
+    updatedAt: d?.updatedAt ?? null,
+    source: cur || prev ? "효성CMS(수납/완납)" : "none",
+    note: cur || prev ? undefined : "아직 수집 전 — 매일 08:00 자동수집 또는 지금 동기화 후 표시",
+  };
+}
+app.get("/api/cms", async (_req, res) => {
+  try { res.json(await buildCms()); } catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+app.post("/api/cms/sync", async (_req, res) => syncRoute("cms", ["hyosung-cms-scraper.mjs"], buildCms, res));
+
 // 무실적 가맹점 — 코밴 + 다우데이타 합쳐서 VAN별 + 합산 (+ 국세청 사업자상태 병합)
 async function buildInactive() {
   const kovan = await readJson(INACTIVE_JSON);
@@ -2419,6 +2445,7 @@ app.get("/api/youtube", async (_req, res) => {
 const COLLECT_SCRIPTS = [
   "kovan-tr-scraper.mjs",
   "ddwm-tr-scraper.mjs",
+  "hyosung-cms-scraper.mjs",
   "kovan-inactive-scraper.mjs",
   "ddwm-inactive-scraper.mjs",
 ];

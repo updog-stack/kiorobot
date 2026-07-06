@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, type CSSProperties } from "react";
 import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries } from "../lib/tr";
 import { kicc as kiccSeries, cms as cmsSeries } from "../lib/overview";
+import { fetchCms } from "../lib/cms";
 import { won, growth } from "../lib/format";
 
 const cnt = (n: number) => `${Math.round(n).toLocaleString("ko-KR")}건`;
@@ -332,20 +333,28 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   );
 }
 
-// CMS 매출 (구글시트 참고값) — 거래현황 내 별도 섹션
+// CMS 매출 (효성CMS 수납액 실데이터) — 거래현황 내 별도 섹션
 function CmsSection() {
-  const n = cmsSeries.cur.length;
-  const ytdCur = sumArr(cmsSeries.cur);
-  const ytdPrev = sumArr(cmsSeries.prev.slice(0, n));
+  const [real, setReal] = useState<{ cur: number[]; prev: number[] } | null>(null);
+  useEffect(() => {
+    fetchCms()
+      .then((d) => { if (d.cur || d.prev) setReal({ cur: d.cur ?? cmsSeries.cur, prev: d.prev ?? cmsSeries.prev }); })
+      .catch(() => {});
+  }, []);
+  const cur = real?.cur ?? cmsSeries.cur;
+  const prev = real?.prev ?? cmsSeries.prev;
+  const n = cur.length;
+  const ytdCur = sumArr(cur);
+  const ytdPrev = sumArr(prev.slice(0, n));
   const g = growth(ytdCur, ytdPrev);
-  const thisMonth = cmsSeries.cur[n - 1] ?? 0;
-  const max = Math.max(1, ...cmsSeries.cur, ...cmsSeries.prev);
+  const thisMonth = cur[n - 1] ?? 0;
+  const max = Math.max(1, ...cur, ...prev);
 
   return (
     <>
       <div className="ov__sec-h" style={{ marginTop: 8 }}>
         <h2>CMS 매출</h2>
-        <span>월별 · 작년 대비 (구글시트 참고값)</span>
+        <span>월별 · 작년 대비 (효성CMS 수납액)</span>
       </div>
 
       <div className="sales__kpis">
@@ -376,8 +385,8 @@ function CmsSection() {
         <h2 className="card__title">월별 CMS 매출 — 올해 vs 작년</h2>
         <div className="chart">
           {Array.from({ length: 12 }, (_, i) => {
-            const c = cmsSeries.cur[i] ?? 0;
-            const p = cmsSeries.prev[i] ?? 0;
+            const c = cur[i] ?? 0;
+            const p = prev[i] ?? 0;
             const isLast = i === n - 1;
             return (
               <div className="chart__col" key={i}>

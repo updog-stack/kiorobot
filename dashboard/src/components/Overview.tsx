@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { won, growth } from "../lib/format";
 import { YoutubeCard } from "./YoutubeCard";
 import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
+import { fetchCms } from "../lib/cms";
 import {
   YEAR,
   PREV_YEAR,
@@ -181,6 +182,16 @@ export function Overview() {
     fetchYoutube().then(setYt).catch(() => {});
   }, []);
 
+  // CMS 매출(효성CMS 실데이터) — 없으면 정적 cms 폴백
+  const [cmsView, setCmsView] = useState<Mseries>(cms);
+  useEffect(() => {
+    fetchCms()
+      .then((d) => {
+        if (d.cur || d.prev) setCmsView({ ...cms, sample: false, cur: d.cur ?? cms.cur, prev: d.prev ?? cms.prev });
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="ov">
       <div className="ov__banner">
@@ -193,7 +204,7 @@ export function Overview() {
         <SecHead title="핵심 요약" note="올해 누적(YTD) · 작년 동기간 대비" />
         <div className="ov__row">
           <Kpi icon="🖥️" series={equipment} />
-          <Kpi icon="💳" series={cms} />
+          <Kpi icon="💳" series={cmsView} />
           <Kpi icon="🔁" series={van} />
           <Kpi
             icon="📺"
@@ -218,7 +229,7 @@ export function Overview() {
         <SecHead title="매출 현황" note="장비 · CMS · 매출 구성" />
         <div className="ov__charts">
           <YoYChart series={equipment} />
-          <YoYChart series={cms} />
+          <YoYChart series={cmsView} />
         </div>
       </section>
 
