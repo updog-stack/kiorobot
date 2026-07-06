@@ -437,12 +437,68 @@ function freshEnv() {
   for (const k of CRED_KEYS) delete e[k];
   return e;
 }
-function runScript(scriptName) {
+// ===== VAN 로그인 계정 노션 자동 로드 ([다인] VAN/할부/CMS 계정 DB) =====
+// 노션 계정표에서 코밴·다우 ID/PW를 읽어 스크래퍼에 주입 → 비번 바뀌면 노션만 고치면 됨.
+// (계정 DB가 라함 통합과 공유돼 있어야 함. 실패/미공유 시 .env 값으로 자동 폴백.)
+const VAN_CRED_DS = "422a252e-5579-8356-a5f2-07560126d81f";
+const VAN_CRED_MAP = {
+  "코밴": (id, pw) => ({ KOVAN_ID: id, KOVAN_PW: pw, KOVAN_AGENCY: id }),
+  "다우데이타": (id, pw) => ({ DDWM_ID: id, DDWM_PW: pw }),
+};
+const notionText = (prop) =>
+  prop?.type === "title" ? (prop.title || []).map((t) => t.plain_text).join("")
+  : prop?.type === "rich_text" ? (prop.rich_text || []).map((t) => t.plain_text).join("")
+  : prop?.type === "phone_number" ? (prop.phone_number || "")
+  : prop?.type === "email" ? (prop.email || "")
+  : "";
+let _vanCredCache = { at: 0, env: null };
+async function loadVanCredentials(force = false) {
+  if (!process.env.NOTION_TOKEN) return {};
+  if (!force && _vanCredCache.env && Date.now() - _vanCredCache.at < 5 * 60 * 1000) return _vanCredCache.env;
+  try {
+    const out = {};
+    let cursor;
+    do {
+      const res = await notion.dataSources.query({ data_source_id: VAN_CRED_DS, start_cursor: cursor, page_size: 100 });
+      for (const page of res.results) {
+        const pr = page.properties ?? {};
+        const svc = notionText(pr["서비스명"]).trim();
+        const id = notionText(pr["ID"]).trim();
+        const pw = notionText(pr["PW"]).trim();
+        const fn = VAN_CRED_MAP[svc];
+        if (fn && (id || pw)) Object.assign(out, fn(id, pw));
+      }
+      cursor = res.has_more ? res.next_cursor : undefined;
+    } while (cursor);
+    _vanCredCache = { at: Date.now(), env: out };
+    return out;
+  } catch (e) {
+    console.error("VAN 계정정보(노션) 로드 실패 — .env 폴백:", String(e?.message ?? e));
+    return _vanCredCache.env || {};
+  }
+}
+// 연동 확인용: 노션에서 읽힌 계정(비번 마스킹)
+app.get("/api/van-credentials/status", async (_req, res) => {
+  try {
+    const c = await loadVanCredentials(true);
+    const mask = (v) => (v ? v.slice(0, 2) + "***" : null);
+    const has = Object.keys(c).length > 0;
+    res.json({
+      source: has ? "노션 계정 DB" : ".env(폴백 — DB 미공유/미설정)",
+      loaded: { KOVAN_ID: c.KOVAN_ID ?? null, KOVAN_PW: mask(c.KOVAN_PW), DDWM_ID: c.DDWM_ID ?? null, DDWM_PW: mask(c.DDWM_PW) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+async function runScript(scriptName) {
+  const vanCreds = await loadVanCredentials().catch(() => ({}));
   return new Promise((resolve) => {
     console.log(`▶ 실행: ${scriptName}`);
     const child = spawn(process.execPath, [join(__dirname, scriptName)], {
       cwd: dirname(__dirname),
-      env: freshEnv(),
+      env: { ...freshEnv(), ...vanCreds }, // 노션 계정값 우선, 없으면 .env
     });
     let stderr = "";
     child.stdout.on("data", (d) => process.stdout.write(d));
