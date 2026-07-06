@@ -8,6 +8,7 @@
 import "dotenv/config";
 import { Client } from "@notionhq/client";
 import { chromium } from "playwright";
+import { getVerificationCode, latestCodeMailTime } from "./lib/email-code.mjs";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -53,9 +54,33 @@ async function login(page, id, pw) {
   await page.click("#idLoginBtn").catch(() => {});
   await page.waitForTimeout(6000);
   await killPopups(page);
-  if (/\/login/.test(page.url())) {
+
+  // 이메일 2차인증(다른 IP/24시간) — DDWM처럼 Gmail에서 코드 읽어 처리
+  if (/2fa/.test(page.url())) {
+    const { GMAIL_USER, GMAIL_APP_PASSWORD } = process.env;
+    if (!GMAIL_USER || !GMAIL_APP_PASSWORD) throw new Error("효성CMS 2차인증 필요 — .env GMAIL_USER / GMAIL_APP_PASSWORD 설정 필요");
+    await page.click("#emailBtn").catch(() => {}); // 이메일 인증 선택
+    await page.waitForTimeout(2500);
+    const baseline = await latestCodeMailTime({ user: GMAIL_USER, pass: GMAIL_APP_PASSWORD, match: "효성" }).catch(() => 0);
+    const t0 = Date.now();
+    await page.evaluate(() => { const b = [...document.querySelectorAll("button,a")].find((x) => x.offsetParent !== null && /인증번호\s*발송/.test((x.innerText || "").trim())); if (b) b.click(); });
+    await page.waitForTimeout(3000);
+    const code = await getVerificationCode({
+      user: GMAIL_USER, pass: GMAIL_APP_PASSWORD, match: "효성",
+      sinceMs: Math.max(baseline + 1000, t0 - 90000), timeoutMs: 120000, pollMs: 5000,
+    });
+    await page.fill("#codeInput", code).catch(async () => {
+      await page.evaluate((c) => { const i = [...document.querySelectorAll("input")].find((x) => x.offsetParent !== null && /text|tel|number/.test(x.type) && !x.value); if (i) { i.value = c; i.dispatchEvent(new Event("input", { bubbles: true })); } }, code);
+    });
+    await page.waitForTimeout(500);
+    await page.click("#confirmBtn").catch(() => page.evaluate(() => { const b = [...document.querySelectorAll("button")].find((x) => x.offsetParent !== null && /확인/.test((x.innerText || "").trim())); if (b) b.click(); }));
+    await page.waitForTimeout(5000);
+    await killPopups(page);
+  }
+
+  if (/\/login|2fa/.test(page.url())) {
     const msg = await page.evaluate(() => document.body.innerText.slice(0, 150).replace(/\s+/g, " ")).catch(() => "");
-    throw new Error("로그인 실패(비번 오류 또는 이메일 2차인증 필요): " + msg);
+    throw new Error("로그인/2차인증 실패(비번 오류 또는 코드 미도착): " + msg);
   }
 }
 
