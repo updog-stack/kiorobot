@@ -1386,46 +1386,47 @@ app.post("/api/blog-analyze", async (req, res) => {
   }
 });
 
-// ===== 프롬프트 생성기 — 플랫폼별 노출 콘텐츠 생성 (Claude) =====
-// 주제/키워드 → 유튜브·인스타그램·틱톡/스레드에 바로 올릴 제목·설명·해시태그를 생성.
-const CONTENT_PLATFORMS = {
-  youtube: {
-    label: "유튜브",
+// ===== 프롬프트 생성기 — AI에 붙여넣어 쓰는 '지시문(프롬프트)'을 생성 (Claude) =====
+// 결과물은 콘텐츠(글)가 아니라, ChatGPT·Claude 채팅창에 그대로 붙여넣어 반복 사용하는
+// 완성된 지시문이다. (참고 골든샘플: 무인매장_시리즈_콘텐츠_제작_프롬프트.md 구조)
+const PROMPT_DELIVERABLES = {
+  blog: {
+    label: "블로그 게시글",
     guide:
-      "유튜브 검색·추천 노출 기준: 제목은 핵심 키워드를 앞쪽에 두고 클릭을 부르는 후킹형(궁금증·수치·혜택) 5개. " +
-      "body는 영상 설명란에 그대로 붙일 설명문(첫 2줄에 핵심 요약+키워드, 이후 상세, CTA 포함, 300~600자). " +
-      "hashtags는 제목/설명에 어울리는 # 해시태그 3~5개(유튜브는 과다 금지). tags는 검색 최적화용 태그(# 없이) 10~15개.",
+      "블로그 게시글 작성 규칙: 제목(숫자·구체성 활용, 핵심 키워드 앞배치, 낚시 금지), " +
+      "구조(도입 3~4문장에 독자 고민+얻을 것 약속 → 소제목으로 단계 구분 → 마무리 요약 3줄+다음 편 예고), " +
+      "문체(존댓말 구어체·옆에서 설명하는 톤·전문용어 즉시 풀이·문단당 2~4문장), 기본 분량 2,000~3,000자.",
+  },
+  video: {
+    label: "유튜브 영상 스크립트",
+    guide:
+      "블로그 글이 수정 없이 그대로 AI 영상 툴에서 TTS로 읽히도록 만드는 규칙: " +
+      "소리 내어 자연스러운 구어체만, 한 문장 60자 이내(길면 끊기), 이모지·특수문자 금지, " +
+      "괄호 보충설명 대신 문장으로 풀기, 표 금지(서술로), 숫자·단위 헷갈리지 않게, " +
+      "소제목이 곧 영상 챕터가 되게, URL·링크는 본문에서 빼고 맨 아래 '참고 자료'로. " +
+      "추가로 유튜브 부가요소(영상 제목 후보 2~3, 썸네일 문구 2~3(10자 안팎), 설명란 2~3문장+해시태그 5~8개)도 출력하게 한다.",
   },
   instagram: {
     label: "인스타그램",
     guide:
-      "인스타그램 릴스/피드 노출 기준: titles는 첫 줄에 시선을 잡는 후킹 문구 3~5개. " +
-      "body는 캡션(도입 후킹 → 핵심 3~4줄 → 저장/팔로우 유도 CTA, 이모지 자연스럽게, 300자 내외). " +
-      "hashtags는 도달용(대형)·틈새(중소형)·브랜드 태그를 섞어 15~25개. tags는 빈 배열.",
+      "인스타그램 캡션 규칙: 첫 줄 후킹 → 핵심 3~4줄 → 저장/팔로우 CTA, 이모지 자연스럽게, " +
+      "해시태그는 대형(도달)+중소형(틈새) 섞어 15~25개.",
   },
   tiktok: {
-    label: "틱톡·스레드",
+    label: "틱톡·숏폼",
     guide:
-      "숏폼(틱톡·스레드·쇼츠) 노출 기준: titles는 3초 안에 멈추게 하는 강한 후킹 한 줄 3~5개. " +
-      "body는 아주 짧고 구어체인 캡션(1~2문장, 이모지 가능). hashtags는 트렌드+틈새 섞어 5~10개. tags는 빈 배열.",
+      "틱톡·쇼츠 대본 규칙: 3초 안에 멈추게 하는 강한 후킹, 짧은 구어체 자막/대사, " +
+      "트렌드+틈새 해시태그 5~10개.",
   },
   naver: {
-    label: "네이버 블로그",
+    label: "네이버 블로그(SEO)",
     guide:
-      "네이버 블로그 검색 노출(SEO) 기준: titles는 핵심 키워드를 앞쪽에 둔 제목 후보 3~5개. " +
-      "body는 그대로 붙여넣을 완성 본문 초안(도입부에서 검색 의도에 빠르게 답하고, 소제목·문단으로 구조화, 핵심 키워드를 자연스럽게 반복(스터핑 금지), 800~1500자). " +
-      "마크다운·HTML 없이 순수 텍스트로, 소제목은 빈 줄 뒤 일반 텍스트로 작성. " +
-      "hashtags는 본문 하단에 붙일 #해시태그 5~10개. tags는 블로그 '태그' 입력란용 키워드(# 없이) 8~15개.",
+      "네이버 블로그 검색 노출(SEO) 규칙: 제목 앞쪽 핵심 키워드, 도입부에서 검색의도 즉시 답변, " +
+      "소제목·문단 구조, 핵심 키워드 자연 반복(스터핑 금지), 본문 하단 해시태그와 '태그' 입력란 키워드.",
   },
 };
-const CONTENT_TONES = {
-  hook: "클릭·조회를 부르는 후킹·자극형",
-  info: "정보 전달 중심의 신뢰형",
-  friendly: "친근하고 대화하는 말투",
-  promo: "제품·이벤트 홍보에 초점",
-};
 
-app.post("/api/content-generate", async (req, res) => {
+app.post("/api/prompt-generate", async (req, res) => {
   try {
     const key = process.env.ANTHROPIC_API_KEY;
     if (!key)
@@ -1433,43 +1434,57 @@ app.post("/api/content-generate", async (req, res) => {
 
     const topic = String(req.body?.topic ?? "").trim();
     if (topic.length < 2)
-      return res.status(400).json({ error: "주제/키워드를 입력해 주세요." });
+      return res.status(400).json({ error: "주제/분야를 입력해 주세요." });
 
-    const reqPlatforms = Array.isArray(req.body?.platforms) ? req.body.platforms : [];
-    const platforms = reqPlatforms.filter((p) => CONTENT_PLATFORMS[p]);
-    if (platforms.length === 0)
-      return res.status(400).json({ error: "플랫폼을 하나 이상 선택해 주세요." });
+    const reqDelivs = Array.isArray(req.body?.deliverables) ? req.body.deliverables : [];
+    const deliverables = reqDelivs.filter((d) => PROMPT_DELIVERABLES[d]);
+    if (deliverables.length === 0)
+      return res.status(400).json({ error: "만들 콘텐츠(산출물)를 하나 이상 선택해 주세요." });
 
-    const tone = CONTENT_TONES[req.body?.tone] ? req.body.tone : "hook";
-    const extra = String(req.body?.extra ?? "").trim().slice(0, 500);
+    const audience = String(req.body?.audience ?? "").trim().slice(0, 300);
+    const persona = String(req.body?.persona ?? "").trim().slice(0, 300);
+    const extra = String(req.body?.extra ?? "").trim().slice(0, 800);
     const modelId = BLOG_MODELS[req.body?.model] ? req.body.model : BLOG_DEFAULT_MODEL;
     const cfg = BLOG_MODELS[modelId];
+    const hasVideo = deliverables.includes("video");
 
-    const platformGuides = platforms
-      .map((p) => `- ${p}(${CONTENT_PLATFORMS[p].label}): ${CONTENT_PLATFORMS[p].guide}`)
+    const delivGuides = deliverables
+      .map((d) => `- ${PROMPT_DELIVERABLES[d].label}: ${PROMPT_DELIVERABLES[d].guide}`)
       .join("\n");
 
     const system =
-      "당신은 국내 소셜미디어 마케팅·검색 노출(SEO/추천 알고리즘) 전문가입니다. " +
-      "주어진 주제로 각 플랫폼에 '바로 복사해 올릴 수 있는' 완성 콘텐츠를 한국어로 만드세요. " +
-      "★최우선 목표: '노출이 쉽고 잘 되는' 콘텐츠. " +
-      "경쟁이 극심한 대형 키워드에만 의존하지 말고, 검색·조회 수요는 있으면서 경쟁이 낮은 세부(롱테일) 키워드와 " +
-      "지역·업종·상황을 좁힌 표현을 적극 활용해 실제로 상위 노출·추천에 걸릴 확률을 높이세요. " +
-      "제목·첫 문장·해시태그 맨 앞에는 사람들이 실제로 검색·클릭하는 표현을 배치하고, " +
-      "해시태그는 대형(도달)·중소형(틈새)을 반드시 섞어 상위 노출이 쉬운 틈새 태그를 우선 포함하세요. " +
-      `요청된 톤: ${CONTENT_TONES[tone]}.\n` +
-      "플랫폼별 작성 기준:\n" +
-      platformGuides +
-      "\n\n규칙: 실제로 쓸 수 있는 자연스러운 문장으로 작성하고, 없는 사실을 지어내지 마세요(불명확하면 [여기에 OO] 형태 빈칸). " +
-      "마크다운·코드펜스 없이 순수 JSON 객체만 출력하세요. hashtags 항목은 각 원소를 '#키워드' 형식으로, tags는 '#' 없이 작성하세요.\n" +
-      "출력 스키마:\n" +
-      '{"results":[{"platform":"<요청한 플랫폼 키>","titles":["..."],"body":"...","hashtags":["#..."],"tags":["..."],"tips":["노출 팁"]}]}';
+      "당신은 프롬프트 엔지니어링 전문가입니다. 사용자가 준 분야·산출물·타겟을 바탕으로, " +
+      "사용자가 ChatGPT·Claude 같은 AI 채팅창에 '그대로 붙여넣어' 반복적으로 콘텐츠를 만들 수 있는 " +
+      "완성된 '지시문(프롬프트)'을 한국어로 작성하세요. " +
+      "★중요: 당신의 출력물은 콘텐츠(글·대본) 자체가 아니라, 'AI에게 시킬 명령문'입니다. " +
+      "실제 블로그 글이나 영상 대본을 쓰지 마세요. 그 글을 만들도록 시키는 지시문만 작성합니다.\n\n" +
+      "아래 구조(검증된 실전 프레임워크)를 갖춘, 이 분야에 특화된 프롬프트를 만드세요. " +
+      "각 섹션은 일반론이 아니라 주어진 분야에 맞춰 구체적으로 채웁니다:\n" +
+      "1. 사용법 — 이 프롬프트를 어떻게 쓰는지(대화 시작 시 붙여넣고 '주제: OO' 형식으로 던진다)와 입력 형식 예시\n" +
+      "2. 너의 역할 — 해당 분야 전문가 페르소나(신뢰가 드러나는 구체적 설정)\n" +
+      "3. 콘텐츠의 목적과 우선순위 — 정확한 정보·신뢰 우선, 낚시성 과장 금지\n" +
+      "4. 타겟 — 독자를 구체적으로 정의(이후 모든 문장을 이 사람 기준으로 쓰게 한다)\n" +
+      "5. 정보 수집과 검증 — 시점에 따라 달라지는 정보(법령·가격·지원금·수수료 등)는 최신 확인, 공식 출처 우선, 확인 안 된 내용 금지, 작성 시점 명시, 참고 자료 섹션\n" +
+      "6. 서술 원칙 — 말투/시점(예: 1인칭), 겪지 않은 경험담 날조 금지\n" +
+      "7. 산출물별 작성 규칙 — 아래 선택된 산출물마다의 규칙을 반영\n" +
+      (hasVideo
+        ? "8. AI 영상 변환/TTS 호환 규칙 — 영상 산출물이 있으므로 반드시 포함(문장 60자 이내·이모지/표/특수문자 금지·URL은 맨 아래로 등)\n"
+        : "") +
+      "9. 시리즈/일관성 운영 규칙 — 이전/다음 편 언급, 말투 일관성(시리즈가 아니면 간단히)\n" +
+      "10. 출력 형식 — 주제를 받으면 어떤 순서로 무엇을 출력할지(예: 팩트체크 요약 → 제목 후보 → 본문 전문 → 부가요소 → 다음 편 제안)\n" +
+      "11. 금지 사항 — 검증 안 된 수치, 과장 표현, 낚시, 날조 후기, 근거 없는 브랜드 평가, 법률·세무 단정 등\n\n" +
+      "선택된 산출물별 규칙(7·8번에 녹여라):\n" +
+      delivGuides +
+      "\n\n출력은 순수 텍스트 프롬프트만. 마크다운 제목(##)·목록은 써도 되지만, 코드펜스(```)로 감싸지 말고, " +
+      "당신의 설명·인사말 없이 프롬프트 본문만 출력하세요.";
 
     const user =
-      `주제/키워드: ${topic}\n` +
-      `대상 플랫폼: ${platforms.join(", ")}\n` +
-      (extra ? `추가 정보(제품명·강조점·이벤트 등): ${extra}\n` : "") +
-      `\n각 플랫폼마다 위 스키마의 항목을 채워 results 배열로 출력하세요.`;
+      `분야/주제: ${topic}\n` +
+      `만들 산출물: ${deliverables.map((d) => PROMPT_DELIVERABLES[d].label).join(", ")}\n` +
+      (audience ? `타겟 독자: ${audience}\n` : "") +
+      (persona ? `원하는 역할/페르소나·말투: ${persona}\n` : "") +
+      (extra ? `추가 지침: ${extra}\n` : "") +
+      `\n위 조건에 맞는 완성된 지시문 프롬프트를 작성하세요.`;
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1484,32 +1499,16 @@ app.post("/api/content-generate", async (req, res) => {
     const j = await r.json();
     if (!r.ok) throw new Error(j?.error?.message || `Claude API ${r.status}`);
 
-    let text = (j.content ?? []).map((b) => b.text || "").join("");
-    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-    const parsed = JSON.parse(text);
-    const rawResults = Array.isArray(parsed?.results) ? parsed.results : [];
-    // 요청한 플랫폼 순서대로 정리 + 라벨 부여
-    const results = platforms
-      .map((p) => {
-        const found = rawResults.find((x) => x?.platform === p) || {};
-        return {
-          platform: p,
-          label: CONTENT_PLATFORMS[p].label,
-          titles: Array.isArray(found.titles) ? found.titles.filter(Boolean) : [],
-          body: typeof found.body === "string" ? found.body : "",
-          hashtags: Array.isArray(found.hashtags) ? found.hashtags.filter(Boolean) : [],
-          tags: Array.isArray(found.tags) ? found.tags.filter(Boolean) : [],
-          tips: Array.isArray(found.tips) ? found.tips.filter(Boolean) : [],
-        };
-      })
-      .filter((x) => x.titles.length || x.body || x.hashtags.length);
+    let prompt = (j.content ?? []).map((b) => b.text || "").join("");
+    prompt = prompt.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    if (!prompt) throw new Error("빈 응답입니다. 다시 시도해 주세요.");
 
     const inTok = j.usage?.input_tokens || 0;
     const outTok = j.usage?.output_tokens || 0;
     const usd = (inTok * cfg.priceIn + outTok * cfg.priceOut) / 1_000_000;
 
     res.json({
-      results,
+      prompt,
       usedModel: modelId,
       cost: { inputTokens: inTok, outputTokens: outTok, usd, krw: Math.round(usd * 1400) },
     });
@@ -1517,8 +1516,6 @@ app.post("/api/content-generate", async (req, res) => {
     const msg = String(e?.message ?? e);
     if (/quota|rate|429|overloaded/i.test(msg))
       return res.status(429).json({ error: "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요." });
-    if (msg.includes("JSON"))
-      return res.status(502).json({ error: "생성 결과 형식이 올바르지 않습니다. 다시 시도해 주세요." });
     res.status(500).json({ error: msg.slice(0, 200) });
   }
 });
