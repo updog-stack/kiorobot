@@ -230,7 +230,7 @@ async function loadSource(src) {
       // 시트에서 넣은 실제 매출액 우선(수식 총액은 폴백)
       const raw = numberOf(props["매출액(시트)"]) ?? numberOf(props[src.amountProp]);
       if (date && typeof raw === "number") {
-        records.push({ date: date.slice(0, 10), amount: raw * src.scale });
+        records.push({ date: date.slice(0, 10), amount: Math.round(raw * src.scale) });
       }
     }
     cursor = res.has_more ? res.next_cursor : undefined;
@@ -287,7 +287,7 @@ async function buildSalesMonthly() {
       if (!date || typeof amt !== "number") continue;
       const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7));
       if (y !== curYear || m < 1 || m > 12) continue;
-      curByCat[SALES_CAT(props["구분"]?.select?.name ?? "")][m - 1] += amt * src.scale;
+      curByCat[SALES_CAT(props["구분"]?.select?.name ?? "")][m - 1] += Math.round(amt * src.scale);
     }
     cursor = res.has_more ? res.next_cursor : undefined;
   } while (cursor);
