@@ -227,8 +227,8 @@ async function loadSource(src) {
     for (const page of res.results) {
       const props = page.properties ?? {};
       const date = dateOf(props[src.dateProp]);
-      // 시트에서 넣은 실제 매출액 우선(수식 총액은 폴백)
-      const raw = numberOf(props["매출액(시트)"]) ?? numberOf(props[src.amountProp]);
+      // 총액(VAT 포함, 숫자) 우선 / 구버전 매출액(시트) 폴백
+      const raw = numberOf(props[src.amountProp]) ?? numberOf(props["매출액(시트)"]);
       if (date && typeof raw === "number") {
         records.push({ date: date.slice(0, 10), amount: Math.round(raw * src.scale) });
       }
@@ -282,8 +282,8 @@ async function buildSalesMonthly() {
     for (const page of res.results) {
       const props = page.properties ?? {};
       const date = dateOf(props[src.dateProp]);
-      // 시트에서 넣은 실제 매출액 우선(수식 총액은 폴백)
-      const amt = numberOf(props["매출액(시트)"]) ?? numberOf(props[src.amountProp]);
+      // 총액(VAT 포함, 숫자) 우선 / 구버전 매출액(시트) 폴백
+      const amt = numberOf(props[src.amountProp]) ?? numberOf(props["매출액(시트)"]);
       if (!date || typeof amt !== "number") continue;
       const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7));
       if (y !== curYear || m < 1 || m > 12) continue;
