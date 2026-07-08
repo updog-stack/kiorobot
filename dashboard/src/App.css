@@ -637,6 +637,75 @@
   font-size: 11px;
 }
 
+/* ===== 월별 막대 차트 v2 (좌측 금액 눈금 + 가로 격자선) ===== */
+.mchart {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.mchart__y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 200px;
+  flex: 0 0 auto;
+  padding-right: 2px;
+}
+.mchart__ytick {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted, #94a3b8);
+  white-space: nowrap;
+}
+.mchart__body {
+  flex: 1;
+  min-width: 0;
+}
+.mchart__plot {
+  position: relative;
+  height: 200px;
+}
+.mchart__grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--border, #e8edf3);
+}
+.mchart__bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.mchart__col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+}
+.mchart__bar {
+  width: 42%;
+  max-width: 22px;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
+}
+.mchart__x {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+.mchart__xtick {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+}
+
 /* ===== 동기화 툴바 / 버튼 ===== */
 .sales__toolbar {
   display: flex;
@@ -1348,6 +1417,11 @@
   flex-wrap: wrap;
   gap: 8px;
   margin: 2px 0 12px;
+  min-height: 30px;
+}
+/* CMS·VAN 차트의 높이 맞춤용 빈 자리(월 기준선 정렬) */
+.ov__cat-picker--ghost {
+  visibility: hidden;
 }
 .ov__cat-picker-label {
   font-size: 12px;

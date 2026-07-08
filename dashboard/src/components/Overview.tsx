@@ -74,7 +74,27 @@ function Kpi({
   );
 }
 
-// ===== 월별 막대 (올해 vs 작년, 또는 임의 2계열) =====
+// 축 눈금: 데이터 최대값 → 4구간 라운드 스케일(간격·최대)
+function niceScale(dataMax: number, ticks = 4): { max: number; step: number } {
+  const rough = Math.max(1, dataMax) / ticks;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const n = rough / pow;
+  const unitStep = n <= 1 ? 1 : n <= 1.5 ? 1.5 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 3 ? 3 : n <= 5 ? 5 : 10;
+  const step = unitStep * pow;
+  return { max: step * ticks, step };
+}
+// 축 라벨(간결): 원→만/억, 건→만
+function axisLabel(v: number, unit: Unit): string {
+  if (v === 0) return "0";
+  if (unit === "won") {
+    if (v >= 1e8) return (v / 1e8).toFixed(v % 1e8 === 0 ? 0 : 1) + "억";
+    return Math.round(v / 1e4).toLocaleString("ko-KR") + "만";
+  }
+  if (v >= 1e4) return Math.round(v / 1e4).toLocaleString("ko-KR") + "만";
+  return Math.round(v).toLocaleString("ko-KR");
+}
+
+// ===== 월별 막대 (올해 vs 작년) — 좌측 금액 눈금 + 가로 격자선 =====
 function MonthBars({
   cur,
   prev,
@@ -95,41 +115,52 @@ function MonthBars({
   const len = Math.max(cur.length, prev.length);
   const c = Array.from({ length: len }, (_, i) => cur[i] ?? 0);
   const p = Array.from({ length: len }, (_, i) => prev[i] ?? 0);
-  const max = Math.max(1, ...c, ...p);
+  const dataMax = Math.max(1, ...c, ...p);
+  const { max: axisMax, step } = niceScale(dataMax, 4);
+  const ticks = Array.from({ length: 5 }, (_, i) => step * i); // 0 … axisMax
 
   return (
     <>
-      <div className="chart">
-        {Array.from({ length: len }, (_, i) => {
-          const isLast = i === cur.length - 1;
-          return (
-            <div className="chart__col" key={i}>
-              <div className="chart__bars" title={`${i + 1}월`}>
-                <div
-                  className="chart__bar"
-                  style={{
-                    height: `${(p[i] / max) * 100}%`,
-                    background: colorPrev,
-                  }}
-                  title={`${labelPrev} ${i + 1}월: ${fmt(p[i], unit)}`}
-                />
-                <div
-                  className="chart__bar"
-                  style={{
-                    height: `${(c[i] / max) * 100}%`,
-                    background: colorCur,
-                  }}
-                  title={`${labelCur} ${i + 1}월: ${fmt(c[i], unit)}${
-                    isLast ? " (진행 중)" : ""
-                  }`}
-                />
-              </div>
-              <div className="chart__xlabel">
-                {i + 1}월{i === cur.length - 1 ? "*" : ""}
-              </div>
+      <div className="mchart">
+        {/* 좌측 금액 눈금(Y축) */}
+        <div className="mchart__y">
+          {ticks.slice().reverse().map((t) => (
+            <span className="mchart__ytick" key={t}>{axisLabel(t, unit)}</span>
+          ))}
+        </div>
+        <div className="mchart__body">
+          <div className="mchart__plot">
+            {/* 가로 격자선 */}
+            {ticks.map((t) => (
+              <div className="mchart__grid" key={t} style={{ bottom: `${(t / axisMax) * 100}%` }} />
+            ))}
+            {/* 막대 */}
+            <div className="mchart__bars">
+              {Array.from({ length: len }, (_, i) => (
+                <div className="mchart__col" key={i}>
+                  <div
+                    className="mchart__bar"
+                    style={{ height: `${(p[i] / axisMax) * 100}%`, background: colorPrev }}
+                    title={`${labelPrev} ${i + 1}월: ${fmt(p[i], unit)}`}
+                  />
+                  <div
+                    className="mchart__bar"
+                    style={{ height: `${(c[i] / axisMax) * 100}%`, background: colorCur }}
+                    title={`${labelCur} ${i + 1}월: ${fmt(c[i], unit)}${i === cur.length - 1 ? " (진행 중)" : ""}`}
+                  />
+                </div>
+              ))}
             </div>
-          );
-        })}
+          </div>
+          {/* 월 라벨 */}
+          <div className="mchart__x">
+            {Array.from({ length: len }, (_, i) => (
+              <span className="mchart__xtick" key={i}>
+                {i + 1}월{i === cur.length - 1 ? "*" : ""}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="chart__legend">
         <span>
@@ -156,6 +187,8 @@ function YoYChart({ series }: { series: Mseries }) {
           {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
         </span>
       </div>
+      {/* 총매출 차트의 구분 선택줄과 높이 맞춤(월 기준선 정렬) */}
+      <div className="ov__cat-picker ov__cat-picker--ghost" aria-hidden />
       <MonthBars
         cur={series.cur}
         prev={series.prev}
