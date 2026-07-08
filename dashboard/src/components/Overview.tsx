@@ -4,6 +4,7 @@ import { YoutubeCard } from "./YoutubeCard";
 import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
 import { fetchCms } from "../lib/cms";
 import { fetchSalesMonthly, type SalesMonthly } from "../lib/sales";
+import { fetchTr, trMonthly, type TrData } from "../lib/tr";
 import {
   YEAR,
   PREV_YEAR,
@@ -293,6 +294,32 @@ export function Overview() {
       : totalSales.cur;
   const totalSeries: Mseries = { ...totalSales, cur: totalCur };
 
+  // 거래(VAN) 건수 — 코밴·다우 라이브(/api/tr), KICC는 정적 폴백
+  const [tr, setTr] = useState<TrData | null>(null);
+  useEffect(() => {
+    fetchTr().then(setTr).catch(() => {});
+  }, []);
+  const kov = tr ? trMonthly(tr, "kovanCount") : null;
+  const dao = tr ? trMonthly(tr, "ddwmCount") : null;
+  const kovanV: Mseries = kov
+    ? { ...kovan, cur: kov.cur12.slice(0, kov.lastMonth), prev: kov.prev12 }
+    : kovan;
+  const daouV: Mseries = dao
+    ? { ...daou, cur: dao.cur12.slice(0, dao.lastMonth), prev: dao.prev12 }
+    : daou;
+  const vanV: Mseries =
+    kov && dao
+      ? {
+          ...van,
+          cur: Array.from({ length: Math.max(kov.lastMonth, dao.lastMonth) }, (_, i) =>
+            kov.cur12[i] + dao.cur12[i] + (kicc.cur[i] ?? 0)
+          ),
+          prev: Array.from({ length: 12 }, (_, i) =>
+            kov.prev12[i] + dao.prev12[i] + (kicc.prev[i] ?? 0)
+          ),
+        }
+      : van;
+
   return (
     <div className="ov">
       <div className="ov__banner">
@@ -336,13 +363,13 @@ export function Overview() {
 
       {/* ===== 거래(VAN) ===== */}
       <section className="ov__sec">
-        <SecHead title="거래(VAN) 건수" note="DAOU · KOVAN · KICC 합산" />
+        <SecHead title="거래(VAN) 건수" note="DAOU · KOVAN(실데이터) · KICC 합산" />
         <div className="ov__row">
-          <Kpi icon="🟦" series={daou} hint={`DAOU · ${YEAR}년 누적`} />
-          <Kpi icon="🟩" series={kovan} hint={`KOVAN · ${YEAR}년 누적`} />
-          <Kpi icon="🟧" series={kicc} hint={`KICC · ${YEAR}년 누적`} />
+          <Kpi icon="🟦" series={daouV} hint={`DAOU · ${YEAR}년 누적`} />
+          <Kpi icon="🟩" series={kovanV} hint={`KOVAN · ${YEAR}년 누적`} />
+          <Kpi icon="🟧" series={kicc} hint={`KICC · ${YEAR}년 누적(참고)`} />
         </div>
-        <YoYChart series={van} />
+        <YoYChart series={vanV} />
       </section>
 
       {/* ===== 유튜브 ===== */}
