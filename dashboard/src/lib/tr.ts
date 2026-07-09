@@ -14,13 +14,14 @@ export interface TrVan {
   updatedAt: string | null;
 }
 
-/** 2025년~ 다년도 월별 시리즈 — 건수(코밴/다우/합산) + 다우 금액(코밴 금액은 포털 미제공) */
+/** 2025년~ 다년도 월별 시리즈 — 건수(코밴/다우/합산) + VAN별 금액 */
 export interface TrSeries {
   months: string[]; // "2025-01" … 시간순
   kovanCount: number[];
   ddwmCount: number[];
   totalCount: number[];
   ddwmAmount: number[]; // 원
+  kovanAmount?: number[]; // 원 — 신용+체크 카드, 100만원 초과 절삭·1천원 이하 제외(근사)
 }
 
 export interface TrData {

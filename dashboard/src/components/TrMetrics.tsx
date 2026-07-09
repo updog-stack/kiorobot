@@ -198,7 +198,6 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
 
   if (!series || !series.months.length || !year) return null;
 
-  const eok = (w: number) => `${(w / 1e8).toFixed(1)}억`;
   // 막대 위 라벨용 축약: 건수=만, 금액=억
   const cntMan = (n: number) => (n >= 10000 ? `${Math.round(n / 10000).toLocaleString()}만` : n.toLocaleString());
   const eokShort = (w: number) => {
@@ -212,14 +211,15 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
 
   // 선택 년도만 필터
   const rows = series.months
-    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kovan: series.kovanCount[i], ddwm: series.ddwmCount[i], total: series.totalCount[i], amt: series.ddwmAmount[i] }))
+    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kovan: series.kovanCount[i], ddwm: series.ddwmCount[i], total: series.totalCount[i], amt: series.ddwmAmount[i], kAmt: series.kovanAmount?.[i] ?? 0 }))
     .filter((_, i) => series.months[i].startsWith(`${year}-`));
   const maxCnt = Math.max(1, ...rows.map((r) => r.total));
-  const maxAmt = Math.max(1, ...rows.map((r) => r.amt));
+  const maxAmt = Math.max(1, ...rows.map((r) => r.amt + r.kAmt)); // 코밴+다우 스택 기준
   const yTotalCnt = rows.reduce((s, r) => s + r.total, 0);
   const yKovanCnt = rows.reduce((s, r) => s + r.kovan, 0);
   const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
   const yTotalAmt = rows.reduce((s, r) => s + r.amt, 0);
+  const yKovanAmt = rows.reduce((s, r) => s + r.kAmt, 0);
 
   // 직전 년도 '동기간'(같은 월들) 합계 → 증감률
   const curMonthNums = rows.map((r) => r.m);
@@ -274,6 +274,13 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
           <div className="metric__hint">다우데이타 · {rows.length}개월</div>
         </section>
         <section className="metric">
+          <div className="metric__label">{year} 결제 금액(코밴)</div>
+          <div className="metric__amount">{won(yKovanAmt)}</div>
+          <div className="metric__hint">
+            카드 신용+체크 · 100만원 절삭 근사{yKovanAmt ? "" : " · 최근 1년만 제공"}
+          </div>
+        </section>
+        <section className="metric">
           <div className="metric__label">월 평균 금액(다우)</div>
           <div className="metric__amount">{won(rows.length ? yTotalAmt / rows.length : 0)}</div>
           {compare(gAvg, won(prevAvg))}
@@ -308,25 +315,36 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
         </div>
       </section>
 
-      {/* 금액 — 다우만 */}
+      {/* 금액 — 코밴 + 다우 스택 */}
       <section className="card card--wide">
         <h2 className="card__title">
-          {year}년 월별 결제 금액 — 다우데이타{" "}
-          <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}>(코밴은 포털에서 금액 미제공)</span>
+          {year}년 월별 결제 금액 — 코밴 + 다우데이타{" "}
+          <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}>(코밴은 카드 신용+체크·100만원 절삭 근사)</span>
         </h2>
         <div className="chart">
-          {rows.map((r) => (
-            <div className="chart__col" key={r.m}>
-              <div style={valLabel}>{eokShort(r.amt)}</div>
-              <div className="chart__bars" style={{ gap: 0 }} title={`${r.m}월: ${r.amt.toLocaleString()}원`}>
-                <div style={{ width: "58%", maxWidth: 28, height: `${(r.amt / maxAmt) * 100}%`, background: "#f59e0b", borderRadius: "4px 4px 0 0" }} title={`${eok(r.amt)}원`} />
+          {rows.map((r) => {
+            const tot = r.amt + r.kAmt;
+            return (
+              <div className="chart__col" key={r.m}>
+                <div style={valLabel}>{eokShort(tot)}</div>
+                <div
+                  className="chart__bars"
+                  style={{ gap: 0 }}
+                  title={`${r.m}월: 합계 ${tot.toLocaleString()}원 (코밴 ${r.kAmt.toLocaleString()} · 다우 ${r.amt.toLocaleString()})`}
+                >
+                  <div style={{ width: "58%", maxWidth: 28, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                    {barCol((r.amt / maxAmt) * 100, "#f59e0b", { borderRadius: "4px 4px 0 0" })}
+                    {barCol((r.kAmt / maxAmt) * 100, "#7c6df2")}
+                  </div>
+                </div>
+                <div className="chart__xlabel">{r.m}월</div>
               </div>
-              <div className="chart__xlabel">{r.m}월</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="chart__legend">
-          <span><i className="dot" style={{ background: "#f59e0b" }} /> 다우 결제금액(원)</span>
+          <span><i className="dot" style={{ background: "#7c6df2" }} /> 코밴(카드·근사)</span>
+          <span><i className="dot" style={{ background: "#f59e0b" }} /> 다우데이타</span>
         </div>
       </section>
     </>

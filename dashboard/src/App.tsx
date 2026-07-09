@@ -3,31 +3,22 @@ import { Sidebar, type NavItem } from "./components/Sidebar";
 import { Header, type Role } from "./components/Header";
 import { Login } from "./components/Login";
 import { getSession, logout } from "./lib/auth";
-import { TaskStatusView } from "./components/TaskStatus";
-import { WorkLog } from "./components/WorkLog";
+import { WorkHub } from "./components/WorkHub";
 import { Overview } from "./components/Overview";
 import { Schedule } from "./components/Schedule";
 import { ManagementMetrics } from "./components/ManagementMetrics";
-import { BlogChecker } from "./components/BlogChecker";
-import { PromptGen } from "./components/PromptGen";
+import { AiSupport } from "./components/AiSupport";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
-import { CsStatus } from "./components/CsStatus";
-import { CallHeatmap } from "./components/CallHeatmap";
-import { Knowledge } from "./components/Knowledge";
 import { Marketing } from "./components/Marketing";
 import "./App.css";
 
 const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
-  { key: "cs", label: "CS 현황", icon: "💬" },
-  { key: "blog", label: "블로그 검사기", icon: "📝" },
-  { key: "promptgen", label: "프롬프트 생성기", icon: "🪄" },
-  { key: "playbooks", label: "꿀팁게시판", icon: "💡" },
+  { key: "aisupport", label: "AI 업무지원", icon: "🪄" },
   { key: "marketing", label: "마케팅 현황", icon: "📣" },
   { key: "schedule", label: "일정", icon: "📅" },
-  { key: "tasks", label: "업무현황", icon: "✅" },
-  { key: "worklog", label: "업무일지", icon: "📝" },
+  { key: "work", label: "업무현황", icon: "✅" },
   { key: "metrics", label: "경영 지표", icon: "📈" },
   { key: "tr", label: "거래(TR) 현황", icon: "💳" },
   { key: "inactive", label: "무실적 가맹점", icon: "🏪" },
@@ -86,29 +77,7 @@ function App() {
             </div>
           )}
 
-          {active === "cs" && (
-            <div className="full" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-              <CsStatus />
-              <div>
-                <h2 style={{ fontSize: 16, fontWeight: 700, margin: "4px 0 4px" }}>인입 현황 (전화·채팅)</h2>
-                <CallHeatmap />
-              </div>
-            </div>
-          )}
-
-          {active === "blog" && (
-            <div className="full">
-              <BlogChecker />
-            </div>
-          )}
-
-          {active === "promptgen" && (
-            <div className="full">
-              <PromptGen />
-            </div>
-          )}
-
-          {active === "playbooks" && <Knowledge />}
+          {active === "aisupport" && <AiSupport />}
 
           {active === "marketing" && <Marketing />}
 
@@ -118,17 +87,7 @@ function App() {
             </div>
           )}
 
-          {active === "tasks" && (
-            <div className="full">
-              <TaskStatusView />
-            </div>
-          )}
-
-          {active === "worklog" && (
-            <div className="full">
-              <WorkLog />
-            </div>
-          )}
+          {active === "work" && <WorkHub />}
 
           {active === "metrics" && (
             <div className="full">

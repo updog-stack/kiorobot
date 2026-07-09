@@ -33,6 +33,8 @@ if (!KOVAN_ID || !KOVAN_PW) {
 
 const LOGIN_URL = "https://cateca.kovan.com/nKIMOS/Default.aspx";
 const TR_URL = "https://cateca.kovan.com/nKIMOS/mTLF/TrDaily.aspx";
+// 가맹점 금액구간집계(금액 제공) — 코밴은 TrDaily 에 금액이 없어 여기서 월별 금액을 별도 수집.
+const FR_URL = "https://cateca.kovan.com/nKIMOS/mWork/fixedrate.aspx";
 
 const toNum = (s) => {
   const n = Number(String(s).replace(/[^0-9.-]/g, ""));
@@ -104,6 +106,37 @@ async function queryYear(page, year) {
   return parsed.months.map((x) => ({ month: x.month, count: x.count }));
 }
 
+// fixedrate(가맹점 금액구간집계): 한 달 범위를 조회해 '총합계-합계' 금액을 반환.
+//   · 신용+체크 카드 합계. 100만원 초과 절삭·1천원 이하 제외 → 근사치.
+//   · KOVAN_AGENCY(관리코드) 기준 = 다인 + 하위대리점(아무도없개) 합산.
+//   · 1년 이전 내역은 조회 불가 → null.
+async function queryMonthAmount(page, year, month, lastDay) {
+  const yy = String(year).slice(2);
+  const mm = String(month).padStart(2, "0");
+  const sdate = `${yy}${mm}01`;
+  const edate = `${yy}${mm}${String(lastDay).padStart(2, "0")}`;
+  await page.goto(FR_URL, { waitUntil: "networkidle", timeout: 30000 });
+  await page.waitForSelector("#txtSdate", { timeout: 15000 });
+  await page.fill("#txtSdate", sdate);
+  await page.fill("#txtEdate", edate);
+  await page.fill("#txtValue", KOVAN_AGENCY).catch(() => {});
+  await Promise.all([
+    page.waitForLoadState("networkidle").catch(() => {}),
+    page.click("#btnSearch"),
+  ]);
+  await page.waitForTimeout(1500);
+  return await page.evaluate(() => {
+    const num = (s) => Number(String(s).replace(/[^0-9.-]/g, "")) || 0;
+    for (const t of document.querySelectorAll("table")) {
+      const rows = [...t.rows].map((r) => [...r.cells].map((c) => c.innerText.trim()));
+      if (!rows.length || rows[0][0] !== "총합계") continue;
+      const sum = rows.find((r) => r[0] === "합계");
+      if (sum) return { amount: num(sum[2]), count: num(sum[1]) };
+    }
+    return null;
+  });
+}
+
 // 대상 연도: 인자 또는 KOVAN_YEARS(콤마구분). 미지정 시 올해만.
 function targetYears() {
   const arg = process.argv[2] || process.env.KOVAN_YEARS || "";
@@ -115,6 +148,7 @@ async function main() {
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
+  const curDay = now.getDate();
   const years = targetYears();
 
   // 기존 데이터 병합(지정 안 한 연도 보존)
@@ -131,12 +165,36 @@ async function main() {
   try {
     await login(page);
     for (const year of years) {
+      const prevYear = store.years[year];
       const all = await queryYear(page, year);
       const lastMonth = year < curYear ? 12 : year === curYear ? curMonth : 0;
       const monthly = all.filter((m) => m.month >= 1 && m.month <= lastMonth);
+
+      // 월별 금액(fixedrate) 수집 — 1년 이내만 조회 가능, 실패 시 이전 저장값 유지
+      for (const m of monthly) {
+        const ageMonths = (curYear - year) * 12 + (curMonth - m.month);
+        let amount = null;
+        // 당월은 '어제'까지만 조회(fixedrate 는 당일 미정산분이 있으면 범위 전체를 0으로 반환).
+        const isCurMonth = year === curYear && m.month === curMonth;
+        const lastDay = isCurMonth ? curDay - 1 : new Date(year, m.month, 0).getDate();
+        if (ageMonths >= 0 && ageMonths <= 12 && m.count > 0 && lastDay >= 1) {
+          try {
+            const r = await queryMonthAmount(page, year, m.month, lastDay);
+            if (r && r.amount > 0) amount = r.amount;
+          } catch (e) {
+            console.log(`  (금액 조회 실패 ${year}-${m.month}: ${e.message})`);
+          }
+        }
+        if (amount == null) {
+          const p = prevYear?.monthly?.find((x) => x.month === m.month);
+          if (p && p.amount) amount = p.amount;
+        }
+        if (amount != null) m.amount = amount;
+      }
+
       const total = monthly.reduce((s, x) => s + x.count, 0);
       const avg = monthly.length ? total / monthly.length : 0;
-      monthly.forEach((m) => console.log(`  ${year}-${String(m.month).padStart(2, "0")}: ${m.count.toLocaleString()}건`));
+      monthly.forEach((m) => console.log(`  ${year}-${String(m.month).padStart(2, "0")}: ${m.count.toLocaleString()}건${m.amount ? ` · ${m.amount.toLocaleString()}원` : ""}`));
       store.years[year] = { monthly, total, avg };
       console.log(`✅ ${year}: 총 ${total.toLocaleString()}건`);
     }

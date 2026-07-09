@@ -338,16 +338,18 @@ async function buildTr() {
   const combinedTotal = combinedMonthly.reduce((s, x) => s + x.count, 0);
 
   // 다년도 월별 시리즈(2025~) — 그래프용. 건수(코밴/다우/합산) + 다우 금액.
-  const labels = [], kovanCount = [], ddwmCount = [], totalCount = [], ddwmAmount = [];
+  const labels = [], kovanCount = [], ddwmCount = [], totalCount = [], ddwmAmount = [], kovanAmount = [];
   for (const y of allYears.filter((y) => y >= 2025)) {
     const km = new Map((kY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
+    const kmA = new Map((kY[y]?.monthly ?? []).map((m) => [m.month, m.amount ?? 0]));
     const dmC = new Map((dY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
     const dmA = new Map((dY[y]?.monthly ?? []).map((m) => [m.month, m.amount ?? 0]));
     const mset = [...new Set([...km.keys(), ...dmC.keys()])].sort((a, b) => a - b);
     for (const m of mset) {
       labels.push(`${y}-${String(m).padStart(2, "0")}`);
       const kc = km.get(m) ?? 0, dc = dmC.get(m) ?? 0;
-      kovanCount.push(kc); ddwmCount.push(dc); totalCount.push(kc + dc); ddwmAmount.push(dmA.get(m) ?? 0);
+      kovanCount.push(kc); ddwmCount.push(dc); totalCount.push(kc + dc);
+      ddwmAmount.push(dmA.get(m) ?? 0); kovanAmount.push(kmA.get(m) ?? 0);
     }
   }
 
@@ -357,7 +359,7 @@ async function buildTr() {
     years: allYears,
     vans,
     combined: { monthly: combinedMonthly, total: combinedTotal, avg: months.length ? combinedTotal / months.length : 0 },
-    series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount },
+    series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount, kovanAmount },
     note: vans.length ? undefined : "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동 수집 후 표시됩니다.",
   };
 }
