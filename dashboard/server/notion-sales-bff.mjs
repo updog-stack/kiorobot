@@ -396,6 +396,16 @@ app.get("/api/naver-blog", async (_req, res) => {
   }
 });
 
+// 로컬 수집분(당근·블로그) 서버 업로드 — 로컬 PC 수집기가 결과를 서버로 올림(인증 게이트 통과)
+app.post("/api/daangn-ads", async (req, res) => {
+  try { await writeFile(DAANGN_JSON, JSON.stringify(req.body ?? {}, null, 2)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+app.post("/api/naver-blog", async (req, res) => {
+  try { await writeFile(NAVER_BLOG_JSON, JSON.stringify(req.body ?? {}, null, 2)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+
 // CMS 매출(효성CMS 월별 수납/완납액) — hyosung-cms-scraper 수집분
 const CMS_HYOSUNG_JSON = join(__dirname, "data", "cms-hyosung.json");
 async function buildCms() {

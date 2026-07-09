@@ -2,10 +2,12 @@
 //  · 최초 1회 로그인(창에서 직접) → 이후 브라우저를 안 끄고 살려둠(세션 유지) → N분마다 갱신.
 //  · 세션 만료/브라우저 종료 시 재실행+재로그인 필요(당근 제약).
 // 저장: server/data/daangn-ads.json  (BFF /api/daangn-ads 가 제공)
+import "dotenv/config";
 import { chromium } from "playwright";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { pushToServer } from "./lib/push-to-server.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(__dirname, "data", "daangn-profile");
@@ -47,12 +49,14 @@ async function main() {
     try {
       await page.goto(ADS, { waitUntil: "networkidle", timeout: 45000 });
       await page.waitForTimeout(6000);
-      if (/\/login/.test(page.url())) { console.log("⚠️ 세션 만료 — 창에서 다시 로그인 필요"); writeFileSync(OUT, JSON.stringify({ updatedAt: new Date().toISOString(), error: "세션 만료 — 재로그인 필요", loggedOut: true }, null, 2)); return; }
+      if (/\/login/.test(page.url())) { console.log("⚠️ 세션 만료 — 창에서 다시 로그인 필요"); const lo = { updatedAt: new Date().toISOString(), error: "세션 만료 — 재로그인 필요", loggedOut: true }; writeFileSync(OUT, JSON.stringify(lo, null, 2)); await pushToServer("/api/daangn-ads", lo); return; }
       const text = await page.evaluate(() => document.body.innerText);
       writeFileSync(DBG, text);
       const data = parseAds(text.replace(/\s+/g, " "));
-      writeFileSync(OUT, JSON.stringify({ updatedAt: new Date().toISOString(), advertiserId: ADVERTISER, ...data }, null, 2));
+      const payload = { updatedAt: new Date().toISOString(), advertiserId: ADVERTISER, ...data };
+      writeFileSync(OUT, JSON.stringify(payload, null, 2));
       console.log(`[${new Date().toLocaleTimeString()}] 수집: 광고 ${data.ads.length}건 · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
+      await pushToServer("/api/daangn-ads", payload);
     } catch (e) { console.log("수집 오류:", e.message); }
   }
 

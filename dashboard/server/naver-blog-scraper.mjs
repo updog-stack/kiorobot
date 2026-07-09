@@ -2,10 +2,12 @@
 //  · 네이버는 헤드리스를 차단하므로 headless:false(창이 잠깐 뜸). 세션은 유지되어 재로그인 불필요.
 //  · 세션 만료 시 naver-blog-login.bat 로 1회 재로그인.
 // 저장: server/data/naver-blog.json  (BFF /api/naver-blog)
+import "dotenv/config";
 import { chromium } from "playwright";
 import { writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { pushToServer } from "./lib/push-to-server.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(__dirname, "data", "naver-profile");
@@ -34,8 +36,10 @@ async function main() {
     await page.goto(STAT_URL, { waitUntil: "networkidle", timeout: 40000 });
     await wait(7000);
     if (/nidlogin|login/.test(page.url())) {
+      const lo = { updatedAt: new Date().toISOString(), error: "네이버 세션 만료 — 재로그인 필요", loggedOut: true };
       await mkdir(dirname(OUT), { recursive: true });
-      await writeFile(OUT, JSON.stringify({ updatedAt: new Date().toISOString(), error: "네이버 세션 만료 — 재로그인 필요", loggedOut: true }, null, 2));
+      await writeFile(OUT, JSON.stringify(lo, null, 2));
+      await pushToServer("/api/naver-blog", lo);
       console.log("⚠️ 세션 만료 — naver-blog-login.bat 로 재로그인 필요");
       return;
     }
@@ -54,6 +58,7 @@ async function main() {
     };
     await mkdir(dirname(OUT), { recursive: true });
     await writeFile(OUT, JSON.stringify(out, null, 2));
+    await pushToServer("/api/naver-blog", out);
     console.log(`✅ 블로그: 오늘 조회 ${out.today} · 최근7일 ${out.last7} · 최근30일 ${out.last30}${uv ? ` · 순방문(오늘) ${out.visitors.today}` : ""}`);
   } catch (e) {
     console.error("❌", e.message);
