@@ -15,6 +15,7 @@ import { InactiveStores } from "./components/InactiveStores";
 import { CsStatus } from "./components/CsStatus";
 import { CallHeatmap } from "./components/CallHeatmap";
 import { Knowledge } from "./components/Knowledge";
+import { Marketing } from "./components/Marketing";
 import "./App.css";
 
 const NAV: NavItem[] = [
@@ -23,6 +24,7 @@ const NAV: NavItem[] = [
   { key: "blog", label: "블로그 검사기", icon: "📝" },
   { key: "promptgen", label: "프롬프트 생성기", icon: "🪄" },
   { key: "playbooks", label: "꿀팁게시판", icon: "💡" },
+  { key: "marketing", label: "마케팅 현황", icon: "📣" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "tasks", label: "업무현황", icon: "✅" },
   { key: "worklog", label: "업무일지", icon: "📝" },
@@ -107,6 +109,8 @@ function App() {
           )}
 
           {active === "playbooks" && <Knowledge />}
+
+          {active === "marketing" && <Marketing />}
 
           {active === "schedule" && (
             <div className="full">

@@ -706,6 +706,275 @@
   color: var(--muted, #94a3b8);
 }
 
+/* ===== 마케팅: 당근 광고현황 ===== */
+.dga__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dga__head h2 {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0;
+}
+.dga__note {
+  font-size: 11px;
+  font-weight: 700;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+.dga__placeholder {
+  margin-top: 16px;
+  padding: 40px 24px;
+  border: 1px dashed var(--border, #cbd5e1);
+  border-radius: 14px;
+  color: var(--muted, #64748b);
+  font-size: 14px;
+  line-height: 1.8;
+  text-align: center;
+}
+.dga__upd {
+  font-size: 12px;
+  color: var(--muted, #94a3b8);
+}
+.dga__kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+.dga__kpi {
+  flex: 1;
+  min-width: 120px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dga__kpi span {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+.dga__kpi b {
+  font-size: 22px;
+  font-weight: 800;
+}
+.dga__kpi--spend b {
+  color: #ea580c;
+}
+.dga__ads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.dga__ad {
+  flex: 1 1 320px;
+  min-width: 280px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--card, #fff);
+}
+.dga__ad-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.dga__badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.dga__badge--display {
+  color: #0369a1;
+  background: #e0f2fe;
+}
+.dga__badge--search {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+.dga__ad-name {
+  font-weight: 700;
+  font-size: 14px;
+}
+.dga__status {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.dga__status--on {
+  color: #16a34a;
+  background: #dcfce7;
+}
+.dga__status--off {
+  color: #64748b;
+  background: #f1f5f9;
+}
+.dga__ad-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.dga__ad-nums > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dga__ad-nums span {
+  font-size: 11px;
+  color: var(--muted, #64748b);
+}
+.dga__ad-nums b {
+  font-size: 16px;
+  font-weight: 700;
+}
+.dga__foot {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+}
+
+/* 블로그 일별 조회수 차트 (좌측 수치 눈금 + 가로 격자선) */
+.bchart {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 6px;
+}
+.bchart__y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 140px;
+  flex: 0 0 auto;
+}
+.bchart__ytick {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted, #94a3b8);
+}
+.bchart__body {
+  flex: 1;
+  min-width: 0;
+}
+.bchart__plot {
+  position: relative;
+  height: 140px;
+}
+.bchart__grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--border, #e8edf3);
+}
+.bchart__bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.bchart__col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.bchart__bar {
+  width: 60%;
+  max-width: 26px;
+  min-height: 2px;
+  background: #22c55e;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
+}
+.bchart__x {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.bchart__xtick {
+  flex: 1;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted, #94a3b8);
+  white-space: nowrap;
+}
+
+/* 유튜브 카드 폰트를 당근 카드와 동일하게(제목18·KPI 22·라벨 12) */
+.yt-card .metric__amount {
+  font-size: 22px;
+}
+.yt-card .metric__label {
+  font-size: 12px;
+}
+
+/* ===== 단말기 사용현황 카드 ===== */
+.tcard {
+  flex: 1;
+  min-width: 220px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.tcard__van {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tcard__approx {
+  font-size: 10px;
+  font-weight: 700;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.tcard__nums {
+  display: flex;
+  gap: 10px;
+}
+.tcard__nums > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.tcard__nums b {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1;
+}
+.tcard__nums span {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+.tcard__idle b {
+  color: #dc2626;
+}
+.tcard__basis {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+}
+
 /* ===== 동기화 툴바 / 버튼 ===== */
 .sales__toolbar {
   display: flex;

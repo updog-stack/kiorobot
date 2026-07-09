@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { won, growth } from "../lib/format";
-import { YoutubeCard } from "./YoutubeCard";
-import { fetchYoutube, type YoutubeStats } from "../lib/youtube";
 import { fetchCms } from "../lib/cms";
 import { fetchSalesMonthly, type SalesMonthly } from "../lib/sales";
 import { fetchTr, trMonthly, type TrData } from "../lib/tr";
+import { fetchTerminals, type TerminalUsage, type VanTerminals } from "../lib/terminals";
 import {
   YEAR,
   PREV_YEAR,
@@ -253,6 +252,33 @@ function TotalSalesChart({
   );
 }
 
+// 단말기 사용현황 카드(VAN별: 개통/사용/휴면)
+function VanTerminalCard({ label, t }: { label: string; t: VanTerminals | null | undefined }) {
+  if (!t || t.error) {
+    return (
+      <div className="tcard">
+        <div className="tcard__van">{label}</div>
+        <div className="tcard__basis">{t?.error ? "수집 오류" : "수집 전"}</div>
+      </div>
+    );
+  }
+  const pct = t.opened ? Math.round((t.idle / t.opened) * 100) : 0;
+  return (
+    <div className="tcard">
+      <div className="tcard__van">
+        {label}
+        {!t.precise && <span className="tcard__approx">월 근사</span>}
+      </div>
+      <div className="tcard__nums">
+        <div><b>{t.opened.toLocaleString("ko-KR")}</b><span>개통</span></div>
+        <div><b>{t.used.toLocaleString("ko-KR")}</b><span>사용</span></div>
+        <div className="tcard__idle"><b>{t.idle.toLocaleString("ko-KR")}</b><span>휴면</span></div>
+      </div>
+      <div className="tcard__basis">휴면율 {pct}% · {t.basis}</div>
+    </div>
+  );
+}
+
 function SecHead({ title, note }: { title: string; note?: string }) {
   return (
     <div className="ov__sec-h">
@@ -262,15 +288,7 @@ function SecHead({ title, note }: { title: string; note?: string }) {
   );
 }
 
-// 유튜브 조회수 KPI용 (실제값은 /api/youtube override 로 채움)
-const YT_VIEWS: Mseries = { key: "ytviews", label: "유튜브 조회수", unit: "views", sample: false, cur: [], prev: [] };
-
 export function Overview() {
-  // 유튜브 채널 지표(실데이터)
-  const [yt, setYt] = useState<YoutubeStats | null>(null);
-  useEffect(() => {
-    fetchYoutube().then(setYt).catch(() => {});
-  }, []);
 
   // CMS 매출(효성CMS 실데이터) — 없으면 정적 cms 폴백
   const [cmsView, setCmsView] = useState<Mseries>(cms);
@@ -298,6 +316,12 @@ export function Overview() {
   const [tr, setTr] = useState<TrData | null>(null);
   useEffect(() => {
     fetchTr().then(setTr).catch(() => {});
+  }, []);
+
+  // 단말기 사용현황(개통/사용/휴면)
+  const [term, setTerm] = useState<TerminalUsage | null>(null);
+  useEffect(() => {
+    fetchTerminals().then(setTerm).catch(() => {});
   }, []);
   const kov = tr ? trMonthly(tr, "kovanCount") : null;
   const dao = tr ? trMonthly(tr, "ddwmCount") : null;
@@ -333,22 +357,7 @@ export function Overview() {
         <div className="ov__row">
           <Kpi icon="💰" series={totalSeries} hint="장비+라이선스+기타 · 올해 누적 · 작년 동기 대비" />
           <Kpi icon="💳" series={cmsView} />
-          <Kpi icon="🔁" series={van} />
-          <Kpi
-            icon="📺"
-            series={YT_VIEWS}
-            noCompare
-            override={{
-              cur: yt?.totalViews ?? 0,
-              prev: 0,
-              value: yt ? `${yt.totalViews.toLocaleString("ko-KR")}회` : "…",
-            }}
-            hint={
-              yt
-                ? `채널 누적 조회수 · 구독자 ${yt.subscribers.toLocaleString("ko-KR")}명 · 영상 ${yt.videoCount}개`
-                : "유튜브 불러오는 중…"
-            }
-          />
+          <Kpi icon="🔁" series={vanV} />
         </div>
       </section>
 
@@ -372,10 +381,13 @@ export function Overview() {
         <YoYChart series={vanV} />
       </section>
 
-      {/* ===== 유튜브 ===== */}
+      {/* ===== 단말기 사용현황 ===== */}
       <section className="ov__sec">
-        <SecHead title="유튜브" note="유튜브 채널 지표" />
-        <YoutubeCard />
+        <SecHead title="단말기 사용현황" note="개통 · 사용(최근 7일 결제) · 휴면(7일 이상 미결제)" />
+        <div className="ov__row">
+          <VanTerminalCard label="🟩 코밴" t={term?.kovan} />
+          <VanTerminalCard label="🟦 다우" t={term?.ddwm} />
+        </div>
       </section>
     </div>
   );

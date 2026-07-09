@@ -6,7 +6,7 @@ const n = (x: number) => x.toLocaleString("ko-KR");
 // 유튜브 로고 아이콘
 function YtIcon() {
   return (
-    <svg width="40" height="28" viewBox="0 0 28 20" aria-hidden style={{ flexShrink: 0 }}>
+    <svg width="28" height="20" viewBox="0 0 28 20" aria-hidden style={{ flexShrink: 0 }}>
       <rect width="28" height="20" rx="5" fill="#FF0000" />
       <path d="M11 6 L20 10 L11 14 Z" fill="#fff" />
     </svg>
@@ -24,11 +24,11 @@ export function YoutubeCard() {
   }, []);
 
   return (
-    <section className="card card--wide">
+    <section className="card card--wide yt-card">
       {/* 제목 + 채널 열기 (제목 옆) */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <YtIcon />
-        <h2 style={{ fontSize: 28, fontWeight: 800, margin: 0, lineHeight: 1.1 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, lineHeight: 1.1 }}>
           유튜브{data ? ` — ${data.channelTitle}` : ""}
         </h2>
         {data && (
@@ -73,7 +73,7 @@ export function YoutubeCard() {
 
           {data.recentVideos.length > 0 && (
             <div style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 10px" }}>최근 영상</h3>
+              <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>최근 영상</h3>
               <ul
                 style={{
                   listStyle: "none",

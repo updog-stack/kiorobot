@@ -366,6 +366,36 @@ app.get("/api/tr", async (_req, res) => {
   res.json(await buildTr());
 });
 
+// 단말기 사용현황(개통/사용/미사용) — terminal-usage-scraper 수집분
+const TERMINAL_JSON = join(__dirname, "data", "terminal-usage.json");
+app.get("/api/terminals", async (_req, res) => {
+  try {
+    res.json((await readJson(TERMINAL_JSON)) ?? { note: "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동수집 후 표시됩니다." });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 당근마켓 광고현황 — daangn-ads-daemon(상주) 수집분
+const DAANGN_JSON = join(__dirname, "data", "daangn-ads.json");
+app.get("/api/daangn-ads", async (_req, res) => {
+  try {
+    res.json((await readJson(DAANGN_JSON)) ?? { note: "당근 광고 수집 미시작 — daangn-ads-daemon 실행(로그인) 필요" });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+// 네이버 블로그(dain_inc) 조회수 — naver-blog-scraper 수집분
+const NAVER_BLOG_JSON = join(__dirname, "data", "naver-blog.json");
+app.get("/api/naver-blog", async (_req, res) => {
+  try {
+    res.json((await readJson(NAVER_BLOG_JSON)) ?? { note: "블로그 통계 미수집 — naver-blog-login 후 수집 필요" });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 // CMS 매출(효성CMS 월별 수납/완납액) — hyosung-cms-scraper 수집분
 const CMS_HYOSUNG_JSON = join(__dirname, "data", "cms-hyosung.json");
 async function buildCms() {
@@ -2488,6 +2518,7 @@ const COLLECT_SCRIPTS = [
   "hyosung-cms-scraper.mjs",
   "kovan-inactive-scraper.mjs",
   "ddwm-inactive-scraper.mjs",
+  "terminal-usage-scraper.mjs",
 ];
 let collectState = { running: false, startedAt: null, finishedAt: null, ok: null, errors: [], auto: false };
 
