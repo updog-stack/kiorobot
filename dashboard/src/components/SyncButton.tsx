@@ -28,21 +28,21 @@ export function SyncButton({ scope, onSynced }: { scope?: string; onSynced?: () 
     }
   }
 
-  // 마케팅 수집(비동기)이 반영되면 자동으로 현재 화면 새로고침. 최대 ~3분 감시.
+  // 마케팅 수집(비동기)이 반영되면 자동으로 현재 화면 새로고침.
+  //   당근·네이버가 시차를 두고 끝나므로, 변화가 있을 때마다 매번 새로고침하고 ~4분간 계속 감시.
   async function watchMarketing() {
     stopPoll();
-    const base = await marketingStamp();
+    let last = await marketingStamp();
     let tries = 0;
     timer.current = window.setInterval(async () => {
       tries += 1;
       const now = await marketingStamp();
-      if (now && now !== base) {
-        stopPoll();
+      if (now && now !== last) {
+        last = now; // 기준 갱신 → 다음 소스(예: 늦게 끝나는 네이버) 변화도 감지
         setMsg("수집 완료 · 갱신됨");
         onSynced?.(); // 현재 페이지 remount → 최신 데이터 표시
-      } else if (tries >= 18) {
-        stopPoll(); // ~3분 경과(변화 없음): PC 꺼짐/세션만료 등
       }
+      if (tries >= 24) stopPoll(); // ~4분 경과 시 감시 종료
     }, 10000);
   }
 
