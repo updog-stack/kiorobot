@@ -56,7 +56,7 @@ export function SyncButton({ scope, onSynced }: { scope?: string; onSynced?: () 
       // 마케팅: 로컬 .bat(당근·네이버)이 새 창에서 수집 → 폴링 없이 안내만
       if (r.marketing) {
         setRunning(false);
-        setMsg(r.started ? "수집 창 실행됨 · 완료 후 새로고침" : (r.note ?? "로컬에서만 가능"));
+        setMsg(r.started ? "백그라운드 수집 중 · 완료 후 새로고침" : (r.note ?? "로컬에서만 가능"));
         return;
       }
       poll();

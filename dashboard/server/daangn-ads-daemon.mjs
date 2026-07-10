@@ -37,19 +37,31 @@ async function main() {
   const ctx = await chromium.launchPersistentContext(PROFILE, { headless: false, viewport: { width: 1360, height: 950 }, ignoreHTTPSErrors: true });
   const page = ctx.pages()[0] ?? (await ctx.newPage());
 
+  // 창 상태 제어(CDP): 로그인돼 있으면 최소화, 로그인 필요할 때만 보이게.
+  const cdp = await ctx.newCDPSession(page).catch(() => null);
+  const winState = async (state) => {
+    if (!cdp) return;
+    try {
+      const { windowId } = await cdp.send("Browser.getWindowForTarget");
+      await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: state } });
+    } catch {}
+  };
+
   // 로그인 확인/대기
   await page.goto(ADS, { waitUntil: "networkidle", timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(3000);
   if (/\/login/.test(page.url())) {
-    console.log("\n▶ 열린 창에서 당근 비즈니스에 로그인해주세요. 로그인되면 자동으로 수집을 시작하고 창은 켜둔 채 유지됩니다.\n");
+    await winState("normal"); // 로그인 필요 → 창 보이게
+    console.log("\n▶ 열린 창에서 당근 비즈니스에 로그인해주세요. 로그인되면 자동으로 최소화되고 백그라운드로 수집합니다.\n");
     for (let i = 0; i < 300; i++) { await page.waitForTimeout(2000); if (!/\/login|nid\.|google|kakao|naver/.test(page.url())) break; }
   }
+  await winState("minimized"); // 로그인됨 → 바로 최소화
 
   async function collect() {
     try {
       await page.goto(ADS, { waitUntil: "networkidle", timeout: 45000 });
       await page.waitForTimeout(6000);
-      if (/\/login/.test(page.url())) { console.log("⚠️ 세션 만료 — 창에서 다시 로그인 필요"); const lo = { updatedAt: new Date().toISOString(), error: "세션 만료 — 재로그인 필요", loggedOut: true }; writeFileSync(OUT, JSON.stringify(lo, null, 2)); await pushToServer("/api/daangn-ads", lo); return; }
+      if (/\/login/.test(page.url())) { await winState("normal"); console.log("⚠️ 세션 만료 — 창에서 다시 로그인 필요"); const lo = { updatedAt: new Date().toISOString(), error: "세션 만료 — 재로그인 필요", loggedOut: true }; writeFileSync(OUT, JSON.stringify(lo, null, 2)); await pushToServer("/api/daangn-ads", lo); return; }
       const text = await page.evaluate(() => document.body.innerText);
       writeFileSync(DBG, text);
       const data = parseAds(text.replace(/\s+/g, " "));
@@ -57,6 +69,7 @@ async function main() {
       writeFileSync(OUT, JSON.stringify(payload, null, 2));
       console.log(`[${new Date().toLocaleTimeString()}] 수집: 광고 ${data.ads.length}건 · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
       await pushToServer("/api/daangn-ads", payload);
+      await winState("minimized"); // 수집 후 다시 최소화
     } catch (e) { console.log("수집 오류:", e.message); }
   }
 
