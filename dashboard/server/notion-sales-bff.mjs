@@ -2620,13 +2620,15 @@ function launchMarketingBats() {
 
 app.post("/api/collect", (req, res) => {
   const scope = req.body?.scope;
-  // 마케팅: 서버(리눅스)에선 불가, 로컬(Windows)에서만 .bat 실행
+  // 마케팅(당근·네이버): 로컬(Windows)이면 직접 백그라운드 실행. 서버면 '수집 요청' 플래그를 세우고
+  //   로컬 수집기(당근 데몬)가 폴링으로 감지해 수집→서버 업로드.
   if (scope === "marketing") {
-    if (process.platform !== "win32") {
-      return res.json({ started: false, marketing: true, note: "당근·네이버 블로그는 로컬 PC에서만 수집됩니다(서버 자동 불가). 로컬 대시보드에서 눌러주세요." });
+    if (process.platform === "win32") {
+      const bats = launchMarketingBats();
+      return res.json({ started: true, marketing: true, bats, note: bats.length ? "백그라운드 수집 중 · 완료 후 새로고침" : "수집 스크립트를 찾지 못했습니다." });
     }
-    const bats = launchMarketingBats();
-    return res.json({ started: true, marketing: true, bats, note: bats.length ? "브라우저 창에서 수집이 진행됩니다. 완료 후 새로고침하세요." : ".bat 파일을 찾지 못했습니다." });
+    marketingTrigger = { requestedAt: Date.now() };
+    return res.json({ started: true, marketing: true, remote: true, note: "로컬 수집기에 요청했습니다 · 로컬 PC가 켜져 있으면 1분 내 수집·반영됩니다. 잠시 후 새로고침" });
   }
   if (collectState.running) return res.status(409).json({ error: "이미 동기화 진행 중입니다.", state: collectState });
   // scope=현재 페이지 키 → 해당 스크래퍼만. 없으면(전체 요청) COLLECT_SCRIPTS 전부.
@@ -2635,6 +2637,12 @@ app.post("/api/collect", (req, res) => {
   res.json({ started: true, scope: scope || "all", count: scripts.length });
 });
 app.get("/api/collect/status", (_req, res) => res.json(collectState));
+
+// 마케팅 수집 원격 트리거 — 서버 대시보드에서 버튼을 누르면 requestedAt 세팅,
+//   로컬 수집기(당근 데몬)가 폴링으로 감지→수집→ack로 클리어.
+let marketingTrigger = { requestedAt: null };
+app.get("/api/marketing-trigger", (_req, res) => res.json({ pending: !!marketingTrigger.requestedAt, requestedAt: marketingTrigger.requestedAt }));
+app.post("/api/marketing-trigger/ack", (_req, res) => { marketingTrigger = { requestedAt: null }; res.json({ ok: true }); });
 
 // 매일 08:00 자동 데이터 동기화 스케줄러
 const COLLECT_HOUR = 8;

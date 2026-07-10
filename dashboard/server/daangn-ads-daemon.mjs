@@ -7,7 +7,8 @@ import { chromium } from "playwright";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { pushToServer } from "./lib/push-to-server.mjs";
+import { spawn } from "node:child_process";
+import { pushToServer, serverFetch } from "./lib/push-to-server.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(__dirname, "data", "daangn-profile");
@@ -75,6 +76,40 @@ async function main() {
 
   await collect();
   setInterval(collect, REFRESH_MS);
-  console.log(`\n✅ 상주 수집 시작 — ${REFRESH_MS / 60000}분마다 갱신. 이 창을 켜두세요.`);
+
+  // 서버 원격 트리거 폴링 — 서버 대시보드에서 '데이터 동기화'(마케팅) 누르면 즉시 수집.
+  const POLL_MS = 30000;
+  let busy = false;
+  setInterval(async () => {
+    if (busy) return;
+    const r = await serverFetch("/api/marketing-trigger");
+    if (!r || !r.ok) return;
+    let j; try { j = await r.json(); } catch { return; }
+    if (!j.pending) return;
+    busy = true;
+    try {
+      console.log(`[${new Date().toLocaleTimeString()}] ▶ 서버 수집 요청 감지 — 당근+네이버 수집`);
+      await serverFetch("/api/marketing-trigger/ack", { method: "POST" }); // 중복 방지 위해 먼저 클리어
+      await collect();       // 당근 즉시 수집
+      runNaverOnce();        // 네이버도 백그라운드 수집
+    } catch (e) { console.log("트리거 처리 오류:", e.message); }
+    finally { busy = false; }
+  }, POLL_MS);
+
+  console.log(`\n✅ 상주 수집 시작 — ${REFRESH_MS / 60000}분마다 갱신 + 서버 요청 폴링(${POLL_MS / 1000}s). 이 창을 켜두세요.`);
 }
+
+// 네이버 블로그 수집 1회(백그라운드, 콘솔 없음)
+function runNaverOnce() {
+  try {
+    const child = spawn(process.execPath, [join(__dirname, "naver-blog-scraper.mjs")], {
+      cwd: join(__dirname, ".."),
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+  } catch (e) { console.log("네이버 실행 오류:", e.message); }
+}
+
 main().catch((e) => { console.error("❌", e.message); process.exit(1); });

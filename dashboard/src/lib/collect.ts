@@ -13,6 +13,7 @@ export interface CollectState {
 export interface CollectStartResult {
   started: boolean;
   marketing?: boolean; // 마케팅 화면 = 로컬 .bat 실행 방식
+  remote?: boolean; // 서버에서 눌러 로컬 수집기에 요청 전달
   bats?: string[];
   note?: string;
   scope?: string;
