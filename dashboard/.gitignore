@@ -40,3 +40,7 @@ server/data/cs-report/
 server/data/*-profile/
 server/data/daangn-profile/
 server/data/naver-profile/
+
+# 로컬 자동수집 런처(로컬 경로 하드코딩) — 각 PC 로컬 전용
+auto-*.vbs
+auto-*.cmd
