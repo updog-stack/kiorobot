@@ -15,6 +15,37 @@ export function SyncButton({ scope, onSynced }: { scope?: string; onSynced?: () 
     }
   }
 
+  // 마케팅 데이터(당근·네이버)의 updatedAt 지문
+  async function marketingStamp(): Promise<string> {
+    try {
+      const [d, n] = await Promise.all([
+        fetch("/api/daangn-ads").then((x) => x.json()).catch(() => ({})),
+        fetch("/api/naver-blog").then((x) => x.json()).catch(() => ({})),
+      ]);
+      return `${d?.updatedAt ?? ""}|${n?.updatedAt ?? ""}`;
+    } catch {
+      return "";
+    }
+  }
+
+  // 마케팅 수집(비동기)이 반영되면 자동으로 현재 화면 새로고침. 최대 ~3분 감시.
+  async function watchMarketing() {
+    stopPoll();
+    const base = await marketingStamp();
+    let tries = 0;
+    timer.current = window.setInterval(async () => {
+      tries += 1;
+      const now = await marketingStamp();
+      if (now && now !== base) {
+        stopPoll();
+        setMsg("수집 완료 · 갱신됨");
+        onSynced?.(); // 현재 페이지 remount → 최신 데이터 표시
+      } else if (tries >= 18) {
+        stopPoll(); // ~3분 경과(변화 없음): PC 꺼짐/세션만료 등
+      }
+    }, 10000);
+  }
+
   function poll() {
     stopPoll();
     timer.current = window.setInterval(async () => {
@@ -53,10 +84,11 @@ export function SyncButton({ scope, onSynced }: { scope?: string; onSynced?: () 
     setMsg(null);
     try {
       const r = await startCollect(scope);
-      // 마케팅: 로컬 .bat(당근·네이버)이 새 창에서 수집 → 폴링 없이 안내만
+      // 마케팅: 로컬/원격에서 비동기 수집 → 데이터 갱신을 감지하면 자동으로 현재 화면 새로고침
       if (r.marketing) {
         setRunning(false);
-        setMsg(r.note ?? (r.started ? "백그라운드 수집 중 · 완료 후 새로고침" : "로컬에서만 가능"));
+        setMsg(r.note ?? (r.started ? "백그라운드 수집 중 · 곧 자동 갱신" : "로컬에서만 가능"));
+        if (r.started) watchMarketing();
         return;
       }
       poll();

@@ -34,7 +34,14 @@ const ROLE_SUBTITLE: Record<Role, string> = {
 };
 
 function App() {
-  const [active, setActive] = useState("overview");
+  // 새로고침해도 보던 메뉴 유지(localStorage). 저장값이 유효한 메뉴일 때만 사용.
+  const [active, setActive] = useState(() => {
+    const saved = localStorage.getItem("dain.activeMenu");
+    return saved && NAV.some((n) => n.key === saved) ? saved : "overview";
+  });
+  useEffect(() => {
+    localStorage.setItem("dain.activeMenu", active);
+  }, [active]);
   const [role, setRole] = useState<Role>("lead");
   // 데이터 동기화 완료 시 증가 → 현재 보고 있는 화면을 remount해 최신 데이터 재조회
   const [syncNonce, setSyncNonce] = useState(0);
