@@ -21,7 +21,9 @@ export interface TrSeries {
   ddwmCount: number[];
   totalCount: number[];
   ddwmAmount: number[]; // 원
-  kovanAmount?: number[]; // 원 — 신용+체크 카드, 100만원 초과 절삭·1천원 이하 제외(근사)
+  kovanAmount?: number[]; // 원 — 실측(신용+체크 카드, 100만원 초과 절삭·1천원 이하 제외 근사). 미수집 월은 0
+  kovanAmountFilled?: number[]; // 원 — 실측 + 미수집 월은 '건수 × 평균단가' 추정치로 채움
+  kovanAmountEst?: boolean[]; // 해당 월이 추정치인지
 }
 
 export interface TrData {

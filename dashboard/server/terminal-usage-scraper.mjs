@@ -36,6 +36,7 @@ async function kovanTerminals(browser) {
   if (await page.$("#txtPasswd")) throw new Error("코밴 로그인 실패");
 
   const selPost = async (sel, opt) => { await page.selectOption(sel, opt).catch(() => {}); await page.waitForLoadState("networkidle").catch(() => {}); await wait(900); };
+  // 반환: { set: 단말기번호 Set, info: {tid→{tid,bizno,name}} }  (col3=사업자번호, col4=단말기번호, col5=상호명)
   const tids = async (sd, ed) => {
     await page.goto("https://cateca.kovan.com/nKIMOS/mTLF/TermCnt.aspx", { waitUntil: "networkidle", timeout: 30000 });
     await wait(900);
@@ -46,16 +47,29 @@ async function kovanTerminals(browser) {
     await Promise.all([page.waitForLoadState("networkidle").catch(() => {}), page.click("#btnFind")]);
     await wait(2800);
     const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 45000 }), page.click("#seBtn")]);
-    const g = XLSX.utils.sheet_to_json(XLSX.read(readFileSync(await dl.path()), { type: "buffer" }).Sheets[XLSX.read(readFileSync(await dl.path()), { type: "buffer" }).SheetNames[0]], { header: 1, blankrows: false, defval: "" });
-    const s = new Set();
-    for (const r of g) { if (/^\d+$/.test(String(r[0]).trim()) && /^\d{6,}/.test(String(r[4]).trim())) s.add(String(r[4]).trim()); } // col4=단말기번호
-    return s;
+    // 코밴 '엑셀'은 실제로 EUC-KR 인코딩 HTML 테이블 → 한글 상호명이 깨지므로 EUC-KR 디코딩 후 파싱
+    const html = new TextDecoder("euc-kr").decode(readFileSync(await dl.path()));
+    const g = XLSX.utils.sheet_to_json(XLSX.read(html, { type: "string" }).Sheets[XLSX.read(html, { type: "string" }).SheetNames[0]], { header: 1, blankrows: false, defval: "" });
+    const set = new Set(); const info = {};
+    for (const r of g) {
+      const tid = String(r[4]).trim();
+      if (/^\d+$/.test(String(r[0]).trim()) && /^\d{6,}/.test(tid)) {
+        set.add(tid);
+        if (!info[tid]) info[tid] = { tid, bizno: String(r[3]).trim(), name: String(r[5]).trim() };
+      }
+    }
+    return { set, info };
   };
-  const used7 = await tids(daysAgo(7), daysAgo(1));
-  const active30 = await tids(daysAgo(30), daysAgo(1));
-  const idle = [...active30].filter((t) => !used7.has(t)).length;
-  console.log(`  코밴: 개통(활성30일) ${active30.size} · 사용7일 ${used7.size} · 미사용 ${idle}`);
-  return { opened: active30.size, used: used7.size, idle, basis: "활성30일 기준·정밀7일", precise: true };
+  const u = await tids(daysAgo(7), daysAgo(1));
+  const a = await tids(daysAgo(30), daysAgo(1));
+  const idleTids = [...a.set].filter((t) => !u.set.has(t));
+  const idleList = idleTids.map((t) => a.info[t]).filter(Boolean).sort((x, y) => x.name.localeCompare(y.name, "ko"));
+  // 가맹점(사업자번호) 기준 — 한 가맹점이 단말기 여러 대일 수 있어 distinct 사업자번호로 집계
+  const bizOf = (r) => [...r.set].map((t) => r.info[t]?.bizno).filter(Boolean);
+  const usedBiz = new Set(bizOf(u)), openedBiz = new Set(bizOf(a));
+  const merch = { opened: openedBiz.size, used: usedBiz.size, idle: [...openedBiz].filter((b) => !usedBiz.has(b)).length };
+  console.log(`  코밴: 단말기 개통 ${a.set.size}·사용 ${u.set.size}·미사용 ${idleTids.length} | 가맹점 개통 ${merch.opened}·사용 ${merch.used}·미사용 ${merch.idle}`);
+  return { opened: a.set.size, used: u.set.size, idle: idleTids.length, idleList, merch, biznos: { opened: [...openedBiz], used: [...usedBiz] }, basis: "활성30일 기준·정밀7일", precise: true };
 }
 
 // 다우 엑셀 조회 헬퍼(조회조건 setup → 조회 → 엑셀 → grid)
@@ -74,62 +88,101 @@ async function ddwmGrab(page, url, setup) {
 }
 const findHdr = (g) => { let h = 0, b = 0; for (let i = 0; i < Math.min(g.length, 6); i++) { const n = g[i].filter((c) => String(c).trim()).length; if (n > b) { b = n; h = i; } } return h; };
 
-// ───────── 다우: 개통(월 히스토그램) + 단말기별 일별누적으로 정밀 7일 ─────────
+// 다우 무실적단말기내역(frmLst_zeroTrml) — 최근 7일간 실적 0인 단말기 = 미사용 (상호/사업자번호).
+//   ※ 다인 직접관리 범위만 나옴(히스토그램 개통수와 모집단이 다를 수 있음).
+async function ddwmIdleList(page) {
+  try {
+    const g = await ddwmGrab(page, "https://van.daoudata.co.kr/pview/Result/Partner/frmLst_zeroTrml", async () => {
+      await page.fill("#searchStartDate", ymd(daysAgo(7))).catch(() => {});
+      await page.fill("#searchEndDate", ymd(daysAgo(1))).catch(() => {});
+    });
+    const h = findHdr(g); const hdr = g[h].map((c) => String(c).replace(/\s/g, ""));
+    const cTid = hdr.findIndex((c) => c.includes("단말기번호"));
+    const cBiz = hdr.findIndex((c) => c.includes("사업자번호"));
+    const cName = hdr.findIndex((c) => c.includes("가맹점상호") || c.includes("상호") || c.includes("사업자명"));
+    const list = [];
+    for (let i = h + 1; i < g.length; i++) {
+      const tid = String(g[i][cTid] ?? "").trim();
+      if (!/^\d{4,}/.test(tid)) continue;
+      list.push({ tid, bizno: String(g[i][cBiz] ?? "").trim(), name: String(g[i][cName] ?? "").trim() });
+    }
+    return list.sort((x, y) => x.name.localeCompare(y.name, "ko"));
+  } catch (e) {
+    console.error("  다우 무실적명단 오류:", e.message);
+    return null;
+  }
+}
+
+// ───────── 다우: 다인 직접관리 · 7일 미결제 기준(코밴과 동일 정의) ─────────
+//   · 이번달 활동 단말기(정산내역) ∪ 무실적7일 = 개통(운영 중)
+//   · 미사용 = 무실적단말기내역(최근 7일 결제 없음) — 상호/사업자번호 포함
+//   · 사용 = 개통 − 미사용.  히스토그램(1071·폐업 단말 포함)은 쓰지 않음.
 async function ddwmTerminals(browser) {
   const page = await (await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })).newPage();
   await ddwmLogin(page);
   const now = new Date();
   const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const today = ymd(now);
 
-  // (1) 개통 총수 + 이번달 0건 — 단말기별 건수실적 히스토그램
-  const gh = await ddwmGrab(page, "https://van.daoudata.co.kr/pview/Result/Partner/frmLst_sumTrml", async () => {
-    await page.fill("#searchStartDate", month).catch(() => {});
-  });
-  const hh = findHdr(gh); const cCnt = gh[hh].map((c) => String(c).replace(/\s/g, "")).findIndex((c) => c === "단말기수");
-  let opened = 0, zeroMonth = 0;
-  for (let i = hh + 1; i < gh.length; i++) { const rg = String(gh[i][0] ?? "").trim(); const n = num(gh[i][cCnt]); if (/합계|소계|총/.test(rg)) continue; opened += n; if (/^0건/.test(rg)) zeroMonth = n; }
-
-  // (2) 단말기별 이번달 누적건수 — 단말기별 정산내역
+  // 이번달 활동 단말기(정산내역) — 최근 운영 중인 다인 직접관리 단말기 집합
   const gt = await ddwmGrab(page, "https://van.daoudata.co.kr/pview/Bill/partner/frmBill_Trml", async () => {
     await page.fill("#selectMonth", month).catch(() => {});
   });
   const ht = findHdr(gt); const hdrT = gt[ht].map((c) => String(c).replace(/\s/g, ""));
-  const cTid = hdrT.findIndex((c) => c.includes("단말기번호")); const cTot = hdrT.findIndex((c) => c === "총건수");
-  const cumToday = {};
-  for (let i = ht + 1; i < gt.length; i++) { const t = String(gt[i][cTid] ?? "").trim(); if (!/^\d{4,}/.test(t)) continue; cumToday[t] = num(gt[i][cTot]); }
+  const cTid = hdrT.findIndex((c) => c.includes("단말기번호"));
+  const cBiz = hdrT.findIndex((c) => c.includes("사업자번호"));
+  const monthActive = new Set(); const tBiz = {};
+  for (let i = ht + 1; i < gt.length; i++) { const t = String(gt[i][cTid] ?? "").trim(); if (!/^\d{4,}/.test(t)) continue; monthActive.add(t); if (cBiz >= 0) tBiz[t] = String(gt[i][cBiz] ?? "").trim(); }
 
-  // (3) 스냅샷 누적 + 오늘 활성 단말기 산출
-  const store = readJsonSafe(SNAP) ?? { days: [] };
-  const prev = store.days[store.days.length - 1];
-  let active;
-  if (prev && prev.month === month) active = Object.keys(cumToday).filter((t) => (cumToday[t] || 0) > (prev.cum[t] || 0));
-  else active = Object.keys(cumToday).filter((t) => cumToday[t] > 0); // 첫날/월경계: 이번달 실적 있으면 활성
-  store.days = store.days.filter((d) => d.date !== today);
-  store.days.push({ date: today, month, cum: cumToday, active });
-  store.days = store.days.slice(-12);
-  await writeFile(SNAP, JSON.stringify(store));
-
-  // (4) 롤링 7일: 최근 7일 스냅샷의 활성 단말기 합집합
-  const last7 = store.days.filter((d) => daysDiff(d.date, today) < 7);
-  const used = new Set(); last7.forEach((d) => d.active.forEach((t) => used.add(t)));
-  const covered = new Set(last7.map((d) => d.date)).size;
-
-  if (covered >= 7) {
-    console.log(`  다우: 개통 ${opened} · 사용7일 ${used.size} · 미사용 ${opened - used.size} (정밀·${covered}일누적)`);
-    return { opened, used: used.size, idle: opened - used.size, basis: "정밀 7일(일별 누적)", precise: true };
-  }
-  console.log(`  다우: 개통 ${opened} · 사용 ${opened - zeroMonth} · 미사용 ${zeroMonth} (월근사·정밀워밍업 ${covered}/7일)`);
-  return { opened, used: opened - zeroMonth, idle: zeroMonth, basis: `월 근사(정밀 워밍업 ${covered}/7일)`, precise: false };
+  // 미사용 명단(최근 7일 미결제) — 무실적단말기내역(상호/사업자번호)
+  const idleList = (await ddwmIdleList(page)) ?? [];
+  const idleTids = new Set(idleList.map((x) => x.tid));
+  const opened = new Set([...monthActive, ...idleTids]).size;
+  const idle = idleTids.size;
+  const used = opened - idle;
+  // 가맹점(사업자번호) 기준 — distinct 사업자번호
+  const usedBiz = new Set([...monthActive].filter((t) => !idleTids.has(t)).map((t) => tBiz[t]).filter(Boolean));
+  const idleBiz = new Set(idleList.map((x) => x.bizno).filter(Boolean));
+  const openedBiz = new Set([...usedBiz, ...idleBiz]);
+  const merch = { opened: openedBiz.size, used: usedBiz.size, idle: [...openedBiz].filter((b) => !usedBiz.has(b)).length };
+  console.log(`  다우: 단말기 개통 ${opened}·사용 ${used}·미사용 ${idle} (다인 직접관리·7일 미결제)·명단 ${idleList.length}곳 | 가맹점 개통 ${merch.opened}·사용 ${merch.used}·미사용 ${merch.idle}`);
+  return { opened, used, idle, idleList, merch, biznos: { opened: [...openedBiz], used: [...usedBiz] }, basis: "다인 직접관리 · 7일 미결제", precise: true };
 }
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
+  const prev = readJsonSafe(OUT) ?? {}; // 이전 저장분 — 수집 실패 시 보존
   const out = { updatedAt: new Date().toISOString(), kovan: null, ddwm: null };
+  const keepPrev = (p, e) => (p && !p.error ? { ...p, stale: true } : { error: e.message });
   try {
-    try { out.kovan = await kovanTerminals(browser); } catch (e) { console.error("  코밴 오류:", e.message); out.kovan = { error: e.message }; }
-    try { out.ddwm = await ddwmTerminals(browser); } catch (e) { console.error("  다우 오류:", e.message); out.ddwm = { error: e.message }; }
+    try { out.kovan = await kovanTerminals(browser); } catch (e) { console.error("  코밴 오류:", e.message); out.kovan = keepPrev(prev.kovan, e); }
+    try { out.ddwm = await ddwmTerminals(browser); } catch (e) { console.error("  다우 오류:", e.message); out.ddwm = keepPrev(prev.ddwm, e); }
   } finally { await browser.close(); }
+
+  // 가맹점(사업자번호) 통합 — 코밴·다우 양쪽 쓰는 가맹점은 한 번만(중복 제거). 양쪽 fresh일 때만.
+  const kb = out.kovan?.biznos, db = out.ddwm?.biznos;
+  if (kb || db) {
+    const usedAll = new Set([...(kb?.used ?? []), ...(db?.used ?? [])]);
+    const openedAll = new Set([...(kb?.opened ?? []), ...(db?.opened ?? [])]);
+    // 미사용 가맹점 명단 — 미사용 단말기의 사업자번호 중 '사용 가맹점(usedAll)'에 없는 것만(양쪽 VAN 통틀어 미사용)
+    const idleByBiz = new Map();
+    for (const r of [...(out.kovan?.idleList ?? []), ...(out.ddwm?.idleList ?? [])]) {
+      if (!r.bizno || usedAll.has(r.bizno) || idleByBiz.has(r.bizno)) continue;
+      idleByBiz.set(r.bizno, r.name);
+    }
+    const idleMerchList = [...idleByBiz.entries()].map(([bizno, name]) => ({ bizno, name })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    out.merchants = {
+      basis: "사업자번호 distinct · 코밴(다인+아무도없개)+다우(다인직접) 통합, KICC 제외",
+      kovan: out.kovan?.merch ?? null,
+      ddwm: out.ddwm?.merch ?? null,
+      combined: { opened: openedAll.size, used: usedAll.size, idle: [...openedAll].filter((b) => !usedAll.has(b)).length },
+      idleList: idleMerchList,
+    };
+    console.log(`  ✅ 가맹점 통합(중복제거): 개통 ${out.merchants.combined.opened} · 사용(최근7일) ${out.merchants.combined.used} · 미사용 ${out.merchants.combined.idle}(명단 ${idleMerchList.length})`);
+  }
+  // 원본 사업자번호 배열은 저장 파일에서 제거(용량·민감도)
+  if (out.kovan) delete out.kovan.biznos;
+  if (out.ddwm) delete out.ddwm.biznos;
+
   await mkdir(dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify(out, null, 2));
   console.log("✅ 저장:", OUT);

@@ -11,16 +11,18 @@ import { AiSupport } from "./components/AiSupport";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
 import { Marketing } from "./components/Marketing";
+import { SalesStatus } from "./components/SalesStatus";
 import "./App.css";
 
 const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
-  { key: "aisupport", label: "AI 업무지원", icon: "🪄" },
-  { key: "marketing", label: "마케팅 현황", icon: "📣" },
+  { key: "sales", label: "매출현황", icon: "💰" },
+  { key: "tr", label: "거래(TR) 현황", icon: "💳" },
+  { key: "metrics", label: "경영 지표", icon: "📈" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "work", label: "업무현황", icon: "✅" },
-  { key: "metrics", label: "경영 지표", icon: "📈" },
-  { key: "tr", label: "거래(TR) 현황", icon: "💳" },
+  { key: "marketing", label: "마케팅 현황", icon: "📣" },
+  { key: "aisupport", label: "AI 업무지원", icon: "🪄" },
   { key: "inactive", label: "무실적 가맹점", icon: "🏪" },
 ];
 
@@ -34,6 +36,8 @@ const ROLE_SUBTITLE: Record<Role, string> = {
 function App() {
   const [active, setActive] = useState("overview");
   const [role, setRole] = useState<Role>("lead");
+  // 데이터 동기화 완료 시 증가 → 현재 보고 있는 화면을 remount해 최신 데이터 재조회
+  const [syncNonce, setSyncNonce] = useState(0);
   // "checking" → 세션 확인 중, "in" → 접속 허용, "out" → 로그인 필요
   const [authState, setAuthState] = useState<"checking" | "in" | "out">("checking");
 
@@ -68,12 +72,20 @@ function App() {
           role={role}
           onRoleChange={setRole}
           onLogout={handleLogout}
+          onSynced={() => setSyncNonce((n) => n + 1)}
+          syncScope={active}
         />
 
-        <main className="content">
+        <main className="content" key={syncNonce}>
           {active === "overview" && (
             <div className="full">
               <Overview />
+            </div>
+          )}
+
+          {active === "sales" && (
+            <div className="full">
+              <SalesStatus />
             </div>
           )}
 

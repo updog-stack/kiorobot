@@ -3,7 +3,7 @@ import { won, growth } from "../lib/format";
 import { fetchCms } from "../lib/cms";
 import { fetchSalesMonthly, type SalesMonthly } from "../lib/sales";
 import { fetchTr, trMonthly, type TrData } from "../lib/tr";
-import { fetchTerminals, type TerminalUsage, type VanTerminals } from "../lib/terminals";
+import { fetchTerminals, type TerminalUsage, type VanTerminals, type MerchantsSummary } from "../lib/terminals";
 import {
   YEAR,
   PREV_YEAR,
@@ -95,7 +95,7 @@ function axisLabel(v: number, unit: Unit): string {
 }
 
 // ===== 월별 막대 (올해 vs 작년) — 좌측 금액 눈금 + 가로 격자선 =====
-function MonthBars({
+export function MonthBars({
   cur,
   prev,
   unit,
@@ -201,7 +201,7 @@ function YoYChart({ series }: { series: Mseries }) {
 }
 
 // 총 매출 차트 — 구분(장비/라이선스/기타) 체크박스로 선택해 비교
-function TotalSalesChart({
+export function TotalSalesChart({
   curByCat,
   lastMonth,
 }: {
@@ -252,8 +252,78 @@ function TotalSalesChart({
   );
 }
 
-// 단말기 사용현황 카드(VAN별: 개통/사용/휴면)
+// 사업자번호 10자리 → XXX-XX-XXXXX
+const fmtBiz = (b: string) => (b && /^\d{10}$/.test(b) ? `${b.slice(0, 3)}-${b.slice(3, 5)}-${b.slice(5)}` : b || "-");
+
+// 미사용 명단 모달(상호/사업자번호). 단말기 명단은 단말기번호 컬럼 표시, 가맹점 명단은 생략.
+function IdleModal({ title, list, note, onClose }: { title: string; list: Array<{ tid?: string; bizno: string; name: string }>; note?: string; onClose: () => void }) {
+  const hasTid = list.some((x) => x.tid);
+  return (
+    <div className="idle-modal" onClick={onClose}>
+      <div className="idle-modal__box" onClick={(e) => e.stopPropagation()}>
+        <div className="idle-modal__head">
+          <h3>{title}</h3>
+          <button className="idle-modal__x" onClick={onClose}>✕</button>
+        </div>
+        {note && <div className="idle-modal__note">{note}</div>}
+        <div className="idle-modal__list">
+          <table>
+            <thead><tr><th>#</th><th>상호명</th><th>사업자번호</th>{hasTid && <th>단말기번호</th>}</tr></thead>
+            <tbody>
+              {list.map((x, i) => (
+                <tr key={(x.tid ?? x.bizno) + "_" + i}>
+                  <td>{i + 1}</td>
+                  <td>{x.name || "-"}</td>
+                  <td>{fmtBiz(x.bizno)}</td>
+                  {hasTid && <td>{x.tid}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 운영 가맹점 수 카드(사업자번호 distinct: 개통/사용/미사용) — 코밴·다우·통합. 미사용 클릭 시 명단
+function MerchantCard({ m }: { m: MerchantsSummary }) {
+  const [showIdle, setShowIdle] = useState(false);
+  const c = m.combined;
+  const idleList = m.idleList ?? [];
+  const canDrill = idleList.length > 0;
+  return (
+    <div className="tcard tcard--merch">
+      <div className="tcard__van">🏪 운영 가맹점 (코밴+다우 통합)</div>
+      <div className="tcard__nums">
+        <div><b>{c.opened.toLocaleString("ko-KR")}</b><span>개통</span></div>
+        <div><b style={{ color: "#16a34a" }}>{c.used.toLocaleString("ko-KR")}</b><span>운영(7일)</span></div>
+        <div
+          className={`tcard__idle${canDrill ? " tcard__idle--btn" : ""}`}
+          onClick={canDrill ? () => setShowIdle(true) : undefined}
+          title={canDrill ? "클릭하면 미사용 가맹점 명단(상호·사업자번호)" : undefined}
+        >
+          <b>{c.idle.toLocaleString("ko-KR")}</b><span>미사용{canDrill ? " ▸" : ""}</span>
+        </div>
+      </div>
+      {showIdle && (
+        <IdleModal
+          title={`미사용 가맹점 ${idleList.length}곳 (7일 미결제)`}
+          list={idleList}
+          note="코밴·다우 통틀어 최근 7일 결제가 없는 가맹점입니다. 한쪽에서라도 결제가 있으면 제외됩니다."
+          onClose={() => setShowIdle(false)}
+        />
+      )}
+      <div className="tcard__basis">
+        운영 기준 코밴 {m.kovan?.used?.toLocaleString("ko-KR") ?? "-"} · 다우 {m.ddwm?.used?.toLocaleString("ko-KR") ?? "-"} (사업자번호 distinct · 양쪽 사용 가맹점 중복 제거 · KICC 제외)
+      </div>
+    </div>
+  );
+}
+
+// 단말기 사용현황 카드(VAN별: 개통/사용/미사용) — 미사용 클릭 시 매장 명단
 function VanTerminalCard({ label, t }: { label: string; t: VanTerminals | null | undefined }) {
+  const [showIdle, setShowIdle] = useState(false);
   if (!t || t.error) {
     return (
       <div className="tcard">
@@ -263,6 +333,8 @@ function VanTerminalCard({ label, t }: { label: string; t: VanTerminals | null |
     );
   }
   const pct = t.opened ? Math.round((t.idle / t.opened) * 100) : 0;
+  const idleList = t.idleList ?? [];
+  const canDrill = idleList.length > 0;
   return (
     <div className="tcard">
       <div className="tcard__van">
@@ -272,9 +344,22 @@ function VanTerminalCard({ label, t }: { label: string; t: VanTerminals | null |
       <div className="tcard__nums">
         <div><b>{t.opened.toLocaleString("ko-KR")}</b><span>개통</span></div>
         <div><b>{t.used.toLocaleString("ko-KR")}</b><span>사용</span></div>
-        <div className="tcard__idle"><b>{t.idle.toLocaleString("ko-KR")}</b><span>휴면</span></div>
+        <div
+          className={`tcard__idle${canDrill ? " tcard__idle--btn" : ""}`}
+          onClick={canDrill ? () => setShowIdle(true) : undefined}
+          title={canDrill ? "클릭하면 미사용 매장 명단(상호·사업자번호)" : undefined}
+        >
+          <b>{t.idle.toLocaleString("ko-KR")}</b><span>미사용{canDrill ? " ▸" : ""}</span>
+        </div>
       </div>
-      <div className="tcard__basis">휴면율 {pct}% · {t.basis}</div>
+      <div className="tcard__basis">미사용율 {pct}% · {t.basis}</div>
+      {showIdle && (
+        <IdleModal
+          title={`${label} · 미사용 매장 ${idleList.length}곳`}
+          list={idleList}
+          onClose={() => setShowIdle(false)}
+        />
+      )}
     </div>
   );
 }
@@ -381,12 +466,13 @@ export function Overview() {
         <YoYChart series={vanV} />
       </section>
 
-      {/* ===== 단말기 사용현황 ===== */}
+      {/* ===== 단말기 사용현황 + 운영 가맹점 수 (한 줄) ===== */}
       <section className="ov__sec">
-        <SecHead title="단말기 사용현황" note="개통 · 사용(최근 7일 결제) · 휴면(7일 이상 미결제)" />
+        <SecHead title="단말기 · 가맹점 사용현황" note="개통 · 사용(최근 7일 결제) · 미사용(7일 이상 미결제) · 미사용 클릭 시 매장 명단" />
         <div className="ov__row">
           <VanTerminalCard label="🟩 코밴" t={term?.kovan} />
           <VanTerminalCard label="🟦 다우" t={term?.ddwm} />
+          {term?.merchants && <MerchantCard m={term.merchants} />}
         </div>
       </section>
     </div>

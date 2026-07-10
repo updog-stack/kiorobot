@@ -7,10 +7,16 @@ export interface CollectState {
   ok: boolean | null;
   errors: string[];
   auto: boolean;
+  scope?: string;
 }
 
-export async function startCollect(): Promise<void> {
-  const res = await fetch("/api/collect", { method: "POST" });
+// scope=현재 페이지 키 → 그 화면에 필요한 스크래퍼만 수집. 생략 시 전체.
+export async function startCollect(scope?: string): Promise<void> {
+  const res = await fetch("/api/collect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
+  });
   if (!res.ok && res.status !== 409) {
     const b = await res.json().catch(() => ({}));
     throw new Error(b?.error || `동기화 시작 실패: ${res.status}`);

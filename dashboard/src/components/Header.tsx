@@ -14,9 +14,11 @@ interface HeaderProps {
   role: Role;
   onRoleChange: (role: Role) => void;
   onLogout?: () => void;
+  onSynced?: () => void;
+  syncScope?: string;
 }
 
-export function Header({ title, subtitle, role, onRoleChange, onLogout }: HeaderProps) {
+export function Header({ title, subtitle, role, onRoleChange, onLogout, onSynced, syncScope }: HeaderProps) {
   return (
     <header className="header">
       <div>
@@ -25,7 +27,7 @@ export function Header({ title, subtitle, role, onRoleChange, onLogout }: Header
       </div>
 
       <div className="header__actions">
-        <SyncButton />
+        <SyncButton scope={syncScope} onSynced={onSynced} />
         <div className="role-switch" role="group" aria-label="역할 선택">
           {ROLES.map((r) => (
             <button

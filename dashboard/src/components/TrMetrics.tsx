@@ -3,6 +3,7 @@ import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries }
 import { kicc as kiccSeries, cms as cmsSeries } from "../lib/overview";
 import { fetchCms } from "../lib/cms";
 import { won, growth } from "../lib/format";
+import { MonthBars } from "./Overview";
 
 const cnt = (n: number) => `${Math.round(n).toLocaleString("ko-KR")}건`;
 const sumArr = (a: number[]) => a.reduce((x, y) => x + y, 0);
@@ -186,8 +187,9 @@ function Chart({ monthly }: { monthly: TrMonth[] }) {
   );
 }
 
-// 월별 결제 추이 — 년도 선택(1년치) · 건수(코밴+다우 스택) + 금액(다우) · 자동수집·누적
-function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
+// 월별 결제 추이 — 년도 선택(1년치) · 건수(코밴+다우 스택) + 금액(코밴+다우) · 자동수집·누적
+//   amountOnly=true 면 금액만(매출현황 메뉴에서 재사용, 건수는 거래현황 전용)
+export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeries; years?: number[]; amountOnly?: boolean }) {
   const allYears = useMemo(() => {
     if (years && years.length) return [...new Set(years)].filter((y) => y >= 2025).sort((a, b) => a - b);
     if (series) return [...new Set(series.months.map((m) => Number(m.slice(0, 4))))].sort((a, b) => a - b);
@@ -209,9 +211,17 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   );
   const valLabel: CSSProperties = { fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 3, whiteSpace: "nowrap", lineHeight: 1 };
 
-  // 선택 년도만 필터
+  // 선택 년도만 필터. 코밴 금액은 filled(실측+추정) 사용, kEst=추정 여부
   const rows = series.months
-    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kovan: series.kovanCount[i], ddwm: series.ddwmCount[i], total: series.totalCount[i], amt: series.ddwmAmount[i], kAmt: series.kovanAmount?.[i] ?? 0 }))
+    .map((ym, i) => ({
+      m: Number(ym.slice(5, 7)),
+      kovan: series.kovanCount[i],
+      ddwm: series.ddwmCount[i],
+      total: series.totalCount[i],
+      amt: series.ddwmAmount[i],
+      kAmt: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0,
+      kEst: series.kovanAmountEst?.[i] ?? false,
+    }))
     .filter((_, i) => series.months[i].startsWith(`${year}-`));
   const maxCnt = Math.max(1, ...rows.map((r) => r.total));
   const maxAmt = Math.max(1, ...rows.map((r) => r.amt + r.kAmt)); // 코밴+다우 스택 기준
@@ -220,6 +230,7 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
   const yTotalAmt = rows.reduce((s, r) => s + r.amt, 0);
   const yKovanAmt = rows.reduce((s, r) => s + r.kAmt, 0);
+  const yearHasEst = rows.some((r) => r.kEst);
 
   // 직전 년도 '동기간'(같은 월들) 합계 → 증감률
   const curMonthNums = rows.map((r) => r.m);
@@ -234,21 +245,31 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
   const gCnt = hasPrev ? growth(yTotalCnt, prevCnt) : null;
   const gAmt = hasPrev ? growth(yTotalAmt, prevAmt) : null;
   const gAvg = hasPrev ? growth(rows.length ? yTotalAmt / rows.length : 0, prevAvg) : null;
-  const compare = (g: ReturnType<typeof growth> | null, prevText: string) =>
+  const compare = (g: ReturnType<typeof growth> | null, prevText: string, label = "동기간") =>
     g ? (
       <div className="metric__compare">
         <span className={`metric__badge metric__badge--${g.tone}`}>
           {g.tone === "up" ? "▲" : g.tone === "down" ? "▼" : ""} {g.text}
         </span>
-        <span className="metric__compare-text">{prevYear} 동기간 {prevText}</span>
+        <span className="metric__compare-text">{prevYear} {label} {prevText}</span>
       </div>
     ) : null;
+
+  // 코밴 YoY — 작년 동기간(같은 월) 비교. 작년 미수집 월은 filled(건수기반 추정치)로 채워 계산.
+  //   다우 카드와 동일한 방식(현재 YTD vs 작년 동일 월). 추정치가 섞이면 배지에 '예측 포함' 표기.
+  const prevKRows = series.months
+    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kF: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0, est: series.kovanAmountEst?.[i] ?? false, ym }))
+    .filter((x) => x.ym.startsWith(`${prevYear}-`) && curMonthNums.includes(x.m));
+  const prevKAmt = prevKRows.reduce((s, r) => s + r.kF, 0);
+  const gKAmt = prevKAmt > 0 ? growth(yKovanAmt, prevKAmt) : null;
+  const gKAvg = prevKAmt > 0 && rows.length && prevKRows.length ? growth(yKovanAmt / rows.length, prevKAmt / prevKRows.length) : null;
+  const kEstInCompare = prevKRows.some((r) => r.est) || yearHasEst;
 
   return (
     <>
       <div className="ov__sec-h" style={{ marginTop: 8 }}>
-        <h2>월별 결제 추이</h2>
-        <span>코밴·다우데이타 · 매일 08:00 자동수집·누적</span>
+        <h2>{amountOnly ? "VAN 결제금액" : "월별 결제 추이"}</h2>
+        <span>{amountOnly ? "코밴·다우 가맹점 거래대금(참고) · 매일 08:00 자동수집" : "코밴·다우데이타 · 매일 08:00 자동수집·누적"}</span>
       </div>
 
       {/* 좌측 상단 년도 필터 */}
@@ -261,12 +282,14 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
       </div>
 
       <div className="sales__kpis">
-        <section className="metric">
-          <div className="metric__label">{year} 결제 건수</div>
-          <div className="metric__amount">{cnt(yTotalCnt)}</div>
-          {compare(gCnt, cnt(prevCnt))}
-          <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)}</div>
-        </section>
+        {!amountOnly && (
+          <section className="metric">
+            <div className="metric__label">{year} 결제 건수</div>
+            <div className="metric__amount">{cnt(yTotalCnt)}</div>
+            {compare(gCnt, cnt(prevCnt))}
+            <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)}</div>
+          </section>
+        )}
         <section className="metric">
           <div className="metric__label">{year} 결제 금액(다우)</div>
           <div className="metric__amount">{won(yTotalAmt)}</div>
@@ -274,21 +297,32 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
           <div className="metric__hint">다우데이타 · {rows.length}개월</div>
         </section>
         <section className="metric">
-          <div className="metric__label">{year} 결제 금액(코밴)</div>
-          <div className="metric__amount">{won(yKovanAmt)}</div>
-          <div className="metric__hint">
-            카드 신용+체크 · 100만원 절삭 근사{yKovanAmt ? "" : " · 최근 1년만 제공"}
-          </div>
-        </section>
-        <section className="metric">
           <div className="metric__label">월 평균 금액(다우)</div>
           <div className="metric__amount">{won(rows.length ? yTotalAmt / rows.length : 0)}</div>
           {compare(gAvg, won(prevAvg))}
           <div className="metric__hint">{year}년 {rows.length}개월 평균</div>
         </section>
+        <section className="metric">
+          <div className="metric__label">{year} 결제 금액(코밴)</div>
+          <div className="metric__amount">{won(yKovanAmt)}</div>
+          {gKAmt && compare(gKAmt, won(prevKAmt), `동기간${kEstInCompare ? "*" : ""}`)}
+          <div className="metric__hint">
+            카드 신용+체크 · 100만원 절삭 근사
+            {kEstInCompare ? " · *미수집 월은 건수기반 예측" : ""}
+          </div>
+        </section>
+        <section className="metric">
+          <div className="metric__label">월 평균 금액(코밴)</div>
+          <div className="metric__amount">{won(rows.length ? yKovanAmt / rows.length : 0)}</div>
+          {gKAvg && compare(gKAvg, won(prevKRows.length ? prevKAmt / prevKRows.length : 0), `동기간${kEstInCompare ? "*" : ""}`)}
+          <div className="metric__hint">
+            {year}년 {rows.length}개월 평균{kEstInCompare ? " · *예측 포함" : ""}
+          </div>
+        </section>
       </div>
 
-      {/* 건수 — 코밴 + 다우 스택 */}
+      {/* 건수 — 코밴 + 다우 스택 (매출현황에선 숨김) */}
+      {!amountOnly && (
       <section className="card card--wide">
         <h2 className="card__title">{year}년 월별 결제 건수 — 코밴 + 다우데이타</h2>
         <div className="chart">
@@ -314,6 +348,7 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
           <span><i className="dot" style={{ background: "#4dd0c4" }} /> 다우데이타</span>
         </div>
       </section>
+      )}
 
       {/* 금액 — 코밴 + 다우 스택 */}
       <section className="card card--wide">
@@ -330,14 +365,14 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
                 <div
                   className="chart__bars"
                   style={{ gap: 0 }}
-                  title={`${r.m}월: 합계 ${tot.toLocaleString()}원 (코밴 ${r.kAmt.toLocaleString()} · 다우 ${r.amt.toLocaleString()})`}
+                  title={`${r.m}월: 합계 ${tot.toLocaleString()}원 (코밴 ${r.kAmt.toLocaleString()}${r.kEst ? " 예측" : ""} · 다우 ${r.amt.toLocaleString()})`}
                 >
                   <div style={{ width: "58%", maxWidth: 28, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
                     {barCol((r.amt / maxAmt) * 100, "#f59e0b", { borderRadius: "4px 4px 0 0" })}
-                    {barCol((r.kAmt / maxAmt) * 100, "#7c6df2")}
+                    {barCol((r.kAmt / maxAmt) * 100, "#7c6df2", r.kEst ? { opacity: 0.4 } : {})}
                   </div>
                 </div>
-                <div className="chart__xlabel">{r.m}월</div>
+                <div className="chart__xlabel">{r.m}월{r.kEst ? "˚" : ""}</div>
               </div>
             );
           })}
@@ -345,14 +380,15 @@ function TrTrend({ series, years }: { series?: TrSeries; years?: number[] }) {
         <div className="chart__legend">
           <span><i className="dot" style={{ background: "#7c6df2" }} /> 코밴(카드·근사)</span>
           <span><i className="dot" style={{ background: "#f59e0b" }} /> 다우데이타</span>
+          {yearHasEst && <span style={{ color: "var(--muted)" }}>˚ 옅은 보라 = 건수기반 예측(미수집 월)</span>}
         </div>
       </section>
     </>
   );
 }
 
-// CMS 매출 (효성CMS 수납액 실데이터) — 거래현황 내 별도 섹션
-function CmsSection() {
+// CMS 매출 (효성CMS 수납액 실데이터) — 거래현황·매출현황에서 재사용
+export function CmsSection() {
   const [real, setReal] = useState<{ cur: number[]; prev: number[] } | null>(null);
   useEffect(() => {
     fetchCms()
@@ -366,7 +402,16 @@ function CmsSection() {
   const ytdPrev = sumArr(prev.slice(0, n));
   const g = growth(ytdCur, ytdPrev);
   const thisMonth = cur[n - 1] ?? 0;
-  const max = Math.max(1, ...cur, ...prev);
+  const prevThisMonth = prev[n - 1] ?? 0;
+  // 월 평균·이번달 작년 대비
+  const gAvg = growth(n ? ytdCur / n : 0, n ? ytdPrev / n : 0);
+  const gThis = growth(thisMonth, prevThisMonth);
+  // 역대 최저·최고 (진행 중인 이번달 제외 — 부분값이 최저로 잡히는 착시 방지)
+  const hist: { v: number; label: string }[] = [];
+  cur.forEach((v, i) => { if (v > 0 && i < n - 1) hist.push({ v, label: `올해 ${i + 1}월` }); });
+  prev.forEach((v, i) => { if (v > 0) hist.push({ v, label: `작년 ${i + 1}월` }); });
+  const hi = hist.length ? hist.reduce((a, b) => (b.v > a.v ? b : a)) : null;
+  const lo = hist.length ? hist.reduce((a, b) => (b.v < a.v ? b : a)) : null;
 
   return (
     <>
@@ -390,48 +435,44 @@ function CmsSection() {
         <section className="metric">
           <div className="metric__label">월 평균 CMS</div>
           <div className="metric__amount">{won(n ? ytdCur / n : 0)}</div>
+          <div className="metric__compare">
+            <span className={`metric__badge metric__badge--${gAvg.tone}`}>
+              {gAvg.tone === "up" ? "▲" : gAvg.tone === "down" ? "▼" : ""} {gAvg.text}
+            </span>
+            <span className="metric__compare-text">작년 동기 {won(n ? ytdPrev / n : 0)}</span>
+          </div>
           <div className="metric__hint">{n}개월 평균</div>
         </section>
         <section className="metric">
           <div className="metric__label">이번달 CMS</div>
           <div className="metric__amount">{won(thisMonth)}</div>
+          <div className="metric__compare">
+            <span className={`metric__badge metric__badge--${gThis.tone}`}>
+              {gThis.tone === "up" ? "▲" : gThis.tone === "down" ? "▼" : ""} {gThis.text}
+            </span>
+            <span className="metric__compare-text">작년 {n}월 {won(prevThisMonth)}</span>
+          </div>
           <div className="metric__hint">{n}월 (진행 중)</div>
         </section>
+        {hi && (
+          <section className="metric">
+            <div className="metric__label">역대 최고 CMS</div>
+            <div className="metric__amount">{won(hi.v)}</div>
+            <div className="metric__hint">{hi.label}</div>
+          </section>
+        )}
+        {lo && (
+          <section className="metric">
+            <div className="metric__label">역대 최저 CMS</div>
+            <div className="metric__amount">{won(lo.v)}</div>
+            <div className="metric__hint">{lo.label} · 진행 중인 달 제외</div>
+          </section>
+        )}
       </div>
 
       <section className="card card--wide">
         <h2 className="card__title">월별 CMS 매출 — 올해 vs 작년</h2>
-        <div className="chart">
-          {Array.from({ length: 12 }, (_, i) => {
-            const c = cur[i] ?? 0;
-            const p = prev[i] ?? 0;
-            const isLast = i === n - 1;
-            return (
-              <div className="chart__col" key={i}>
-                <div className="chart__bars" title={`${i + 1}월`}>
-                  <div
-                    className="chart__bar chart__bar--prev"
-                    style={{ height: `${(p / max) * 100}%` }}
-                    title={`작년 ${i + 1}월: ${won(p)}`}
-                  />
-                  <div
-                    className="chart__bar chart__bar--cur"
-                    style={{ height: `${(c / max) * 100}%` }}
-                    title={`올해 ${i + 1}월: ${won(c)}`}
-                  />
-                </div>
-                <div className="chart__xlabel">
-                  {i + 1}
-                  {isLast ? "*" : ""}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="chart__legend">
-          <span><i className="dot dot--cur" /> 올해</span>
-          <span><i className="dot dot--prev" /> 작년</span>
-        </div>
+        <MonthBars cur={cur} prev={prev} unit="won" labelCur="올해" labelPrev="작년" />
       </section>
     </>
   );

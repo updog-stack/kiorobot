@@ -338,8 +338,26 @@ async function buildTr() {
   const combinedTotal = combinedMonthly.reduce((s, x) => s + x.count, 0);
 
   // 다년도 월별 시리즈(2025~) — 그래프용. 건수(코밴/다우/합산) + 다우 금액.
-  const labels = [], kovanCount = [], ddwmCount = [], totalCount = [], ddwmAmount = [], kovanAmount = [];
+  // 코밴 평균단가(원/건) — 포털 1년 제한으로 미수집된 과거 월 금액을 '건수 × 평균단가'로 추정하기 위함.
+  //   같은 해 실측 월들의 (금액합/건수합) 우선, 그 해에 실측이 없으면 전체 실측 평균 사용.
+  const kRate = (() => {
+    let gA = 0, gC = 0;
+    const perYear = {};
+    for (const y of Object.keys(kY)) {
+      let ya = 0, yc = 0;
+      for (const m of kY[y]?.monthly ?? []) {
+        if ((m.amount ?? 0) > 0 && (m.count ?? 0) > 0) { ya += m.amount; yc += m.count; gA += m.amount; gC += m.count; }
+      }
+      if (yc > 0) perYear[y] = ya / yc;
+    }
+    const global = gC > 0 ? gA / gC : 0;
+    return (y) => perYear[y] ?? global;
+  })();
+
+  const labels = [], kovanCount = [], ddwmCount = [], totalCount = [], ddwmAmount = [];
+  const kovanAmount = [], kovanAmountFilled = [], kovanAmountEst = [];
   for (const y of allYears.filter((y) => y >= 2025)) {
+    const rate = kRate(y);
     const km = new Map((kY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
     const kmA = new Map((kY[y]?.monthly ?? []).map((m) => [m.month, m.amount ?? 0]));
     const dmC = new Map((dY[y]?.monthly ?? []).map((m) => [m.month, m.count]));
@@ -349,7 +367,12 @@ async function buildTr() {
       labels.push(`${y}-${String(m).padStart(2, "0")}`);
       const kc = km.get(m) ?? 0, dc = dmC.get(m) ?? 0;
       kovanCount.push(kc); ddwmCount.push(dc); totalCount.push(kc + dc);
-      ddwmAmount.push(dmA.get(m) ?? 0); kovanAmount.push(kmA.get(m) ?? 0);
+      ddwmAmount.push(dmA.get(m) ?? 0);
+      const kaReal = kmA.get(m) ?? 0;
+      const est = kaReal <= 0 && kc > 0 && rate > 0; // 실측 없고 건수 있으면 추정
+      kovanAmount.push(kaReal);
+      kovanAmountFilled.push(est ? Math.round(kc * rate) : kaReal);
+      kovanAmountEst.push(est);
     }
   }
 
@@ -359,7 +382,7 @@ async function buildTr() {
     years: allYears,
     vans,
     combined: { monthly: combinedMonthly, total: combinedTotal, avg: months.length ? combinedTotal / months.length : 0 },
-    series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount, kovanAmount },
+    series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount, kovanAmount, kovanAmountFilled, kovanAmountEst },
     note: vans.length ? undefined : "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동 수집 후 표시됩니다.",
   };
 }
@@ -2532,14 +2555,26 @@ const COLLECT_SCRIPTS = [
   "ddwm-inactive-scraper.mjs",
   "terminal-usage-scraper.mjs",
 ];
+
+// 페이지(메뉴)별 수집 스코프 — 수동 '데이터 동기화' 버튼은 현재 화면에 필요한 스크래퍼만 실행.
+//   (매일 8시 자동수집은 COLLECT_SCRIPTS 전체. 노션 매출·유튜브·구글일정 등은 API 실시간이라 스크래퍼 없음)
+const TR_CMS = ["kovan-tr-scraper.mjs", "ddwm-tr-scraper.mjs", "hyosung-cms-scraper.mjs"];
+const COLLECT_SCOPES = {
+  overview: [...TR_CMS, "terminal-usage-scraper.mjs"], // VAN 건수·CMS·단말기/가맹점
+  sales: TR_CMS,                                        // 총매출(노션live)·VAN 결제금액·CMS
+  tr: TR_CMS,                                           // 거래 건수·금액·CMS
+  metrics: TR_CMS,                                      // 경영지표 요약
+  inactive: ["kovan-inactive-scraper.mjs", "ddwm-inactive-scraper.mjs"], // 무실적 가맹점
+  // marketing·aisupport·schedule·work: 서버 수집 스크래퍼 없음 → 화면 재조회만
+};
 let collectState = { running: false, startedAt: null, finishedAt: null, ok: null, errors: [], auto: false };
 
-async function runCollect({ auto = false } = {}) {
+async function runCollect({ auto = false, scripts = COLLECT_SCRIPTS, label = "전체" } = {}) {
   if (collectState.running) return collectState;
-  collectState = { running: true, startedAt: new Date().toISOString(), finishedAt: null, ok: null, errors: [], auto };
-  console.log(`📦 데이터 동기화 시작 (${auto ? "자동 8시" : "수동"})`);
+  collectState = { running: true, startedAt: new Date().toISOString(), finishedAt: null, ok: null, errors: [], auto, scope: label };
+  console.log(`📦 데이터 동기화 시작 (${auto ? "자동 8시" : "수동"}·${label}) — ${scripts.length}개 스크립트`);
   try {
-    for (const s of COLLECT_SCRIPTS) {
+    for (const s of scripts) {
       const r = await runScript(s);
       if (r.code !== 0) collectState.errors.push(`${s}: ${(r.stderr.trim().split("\n").pop() || "실패")}`);
     }
@@ -2555,10 +2590,13 @@ async function runCollect({ auto = false } = {}) {
   return collectState;
 }
 
-app.post("/api/collect", (_req, res) => {
+app.post("/api/collect", (req, res) => {
   if (collectState.running) return res.status(409).json({ error: "이미 동기화 진행 중입니다.", state: collectState });
-  runCollect({ auto: false }); // 수 분 소요 → 기다리지 않고 백그라운드 실행
-  res.json({ started: true });
+  // scope=현재 페이지 키 → 해당 스크래퍼만. 없으면(전체 요청) COLLECT_SCRIPTS 전부.
+  const scope = req.body?.scope;
+  const scripts = scope ? (COLLECT_SCOPES[scope] ?? []) : COLLECT_SCRIPTS;
+  runCollect({ auto: false, scripts, label: scope || "전체" }); // 백그라운드 실행
+  res.json({ started: true, scope: scope || "all", count: scripts.length });
 });
 app.get("/api/collect/status", (_req, res) => res.json(collectState));
 
