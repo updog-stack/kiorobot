@@ -16,14 +16,20 @@ interface HeaderProps {
   onLogout?: () => void;
   onSynced?: () => void;
   syncScope?: string;
+  onMenuToggle?: () => void; // 모바일 사이드바 토글
 }
 
-export function Header({ title, subtitle, role, onRoleChange, onLogout, onSynced, syncScope }: HeaderProps) {
+export function Header({ title, subtitle, role, onRoleChange, onLogout, onSynced, syncScope, onMenuToggle }: HeaderProps) {
   return (
     <header className="header">
-      <div>
-        <h1 className="header__title">{title}</h1>
-        {subtitle && <p className="header__sub">{subtitle}</p>}
+      <div className="header__left">
+        {onMenuToggle && (
+          <button className="header__menu" onClick={onMenuToggle} aria-label="메뉴 열기">☰</button>
+        )}
+        <div className="header__titles">
+          <h1 className="header__title">{title}</h1>
+          {subtitle && <p className="header__sub">{subtitle}</p>}
+        </div>
       </div>
 
       <div className="header__actions">

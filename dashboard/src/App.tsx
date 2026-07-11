@@ -45,6 +45,8 @@ function App() {
   const [role, setRole] = useState<Role>("lead");
   // 데이터 동기화 완료 시 증가 → 현재 보고 있는 화면을 remount해 최신 데이터 재조회
   const [syncNonce, setSyncNonce] = useState(0);
+  // 모바일 사이드바(드로어) 열림 여부
+  const [navOpen, setNavOpen] = useState(false);
   // "checking" → 세션 확인 중, "in" → 접속 허용, "out" → 로그인 필요
   const [authState, setAuthState] = useState<"checking" | "in" | "out">("checking");
 
@@ -70,7 +72,16 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar items={NAV} active={active} onSelect={setActive} />
+      <Sidebar
+        items={NAV}
+        active={active}
+        onSelect={(k) => {
+          setActive(k);
+          setNavOpen(false);
+        }}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+      />
 
       <div className="main">
         <Header
@@ -81,6 +92,7 @@ function App() {
           onLogout={handleLogout}
           onSynced={() => setSyncNonce((n) => n + 1)}
           syncScope={active}
+          onMenuToggle={() => setNavOpen((o) => !o)}
         />
 
         <main className="content" key={syncNonce}>
