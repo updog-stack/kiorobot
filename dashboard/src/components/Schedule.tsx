@@ -31,6 +31,15 @@ export function Schedule() {
   const [selected, setSelected] = useState<SchedEvent | null>(null);
   const [form, setForm] = useState<FormSeed | null>(null);
   const [busy, setBusy] = useState(false);
+  // 캘린더(카테고리) 필터 — 숨긴 것 집합. 기본은 비어 있음(전체 표시).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const toggleCal = (c: string) =>
+    setHidden((prev) => {
+      const n = new Set(prev);
+      if (n.has(c)) n.delete(c);
+      else n.add(c);
+      return n;
+    });
 
   const days = useMemo(() => monthGrid(cursor), [cursor]);
   const rangeStart = days[0];
@@ -161,11 +170,22 @@ export function Schedule() {
           {cals.length > 0 && (
             <div className="cal__legend">
               {cals.map((c) => (
-                <span key={c} className="cal__legend-item">
+                <button
+                  key={c}
+                  type="button"
+                  className={`cal__legend-item${hidden.has(c) ? " is-off" : ""}`}
+                  onClick={() => toggleCal(c)}
+                  title={hidden.has(c) ? "표시하기" : "숨기기"}
+                >
                   <i className="dot" style={{ background: calColor(cals, c) }} />
                   {c}
-                </span>
+                </button>
               ))}
+              {hidden.size > 0 && (
+                <button type="button" className="cal__legend-all" onClick={() => setHidden(new Set())}>
+                  전체 보기
+                </button>
+              )}
             </div>
           )}
           {editable ? (
@@ -187,7 +207,7 @@ export function Schedule() {
 
         {days.map((d) => {
           const key = ymKey(d);
-          const evs = byDay.get(key) ?? [];
+          const evs = (byDay.get(key) ?? []).filter((e) => !(e.cal && hidden.has(e.cal)));
           const out = d.getMonth() !== curMonth;
           const isToday = key === tKey;
           const shown = evs.slice(0, 4);
