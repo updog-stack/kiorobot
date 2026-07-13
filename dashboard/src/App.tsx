@@ -12,7 +12,6 @@ import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
 import { Marketing } from "./components/Marketing";
 import { SalesStatus } from "./components/SalesStatus";
-import { ImageResizer } from "./components/ImageResizer";
 import "./App.css";
 
 const NAV: NavItem[] = [
@@ -24,7 +23,6 @@ const NAV: NavItem[] = [
   { key: "work", label: "업무현황", icon: "✅" },
   { key: "marketing", label: "마케팅 현황", icon: "📣" },
   { key: "aisupport", label: "AI 업무지원", icon: "🪄" },
-  { key: "imagetool", label: "이미지 리사이저", icon: "🖼️" },
   { key: "inactive", label: "무실적 가맹점", icon: "🏪" },
 ];
 
@@ -113,12 +111,6 @@ function App() {
           {active === "aisupport" && <AiSupport />}
 
           {active === "marketing" && <Marketing />}
-
-          {active === "imagetool" && (
-            <div className="full">
-              <ImageResizer />
-            </div>
-          )}
 
           {active === "schedule" && (
             <div className="full">
