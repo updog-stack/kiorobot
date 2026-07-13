@@ -474,14 +474,7 @@ export function Overview() {
         </div>
       </section>
 
-      {/* ===== 매출 ===== */}
-      <section className="ov__sec">
-        <SecHead title="매출 현황" note="총매출(장비·라이선스·기타) · CMS" />
-        <div className="ov__charts">
-          <TotalSalesChart curByCat={sales?.curByCat ?? null} lastMonth={sales?.lastMonth ?? 0} />
-          <YoYChart series={cmsView} />
-        </div>
-      </section>
+      {/* 매출 현황 차트는 '매출현황' 메뉴로 이관(중복 제거) — 전체현황은 핵심요약 KPI만 유지 */}
 
       {/* ===== 거래(VAN) ===== */}
       <section className="ov__sec">
