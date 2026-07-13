@@ -27,7 +27,8 @@ export interface MerchantsSummary {
   basis?: string;
   kovan: MerchCount | null;
   ddwm: MerchCount | null;
-  combined: MerchCount; // 코밴+다우 중복(양쪽 사용 가맹점) 제거
+  kicc?: number; // KICC 가맹점 수(단말기 미수집 · 수기 반영)
+  combined: MerchCount; // 코밴+다우 중복 제거 + KICC
   idleList?: IdleMerchant[]; // 미사용 가맹점(7일 미결제) 명단 — 상호/사업자번호
 }
 export interface TerminalUsage {

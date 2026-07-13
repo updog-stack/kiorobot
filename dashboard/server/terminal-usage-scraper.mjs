@@ -158,12 +158,15 @@ async function main() {
     try { out.ddwm = await ddwmTerminals(browser); } catch (e) { console.error("  다우 오류:", e.message); out.ddwm = keepPrev(prev.ddwm, e); }
   } finally { await browser.close(); }
 
-  // 가맹점(사업자번호) 통합 — 코밴·다우 양쪽 쓰는 가맹점은 한 번만(중복 제거). 양쪽 fresh일 때만.
+  // 가맹점(사업자번호) 통합 — 코밴·다우 중복 제거 + KICC 수기.
+  //   ※ 통합은 biznos(사업자번호 집합)로 dedup하므로 '양쪽 fresh'일 때만 재계산.
+  //     한쪽이라도 실패(stale)면 biznos가 없어 잘못 계산되므로 이전 통합값을 유지한다.
+  const KICC_MERCHANTS = 40; // KICC 가맹점(단말기 수집 대상 아님) — 약 40곳 수기 반영
   const kb = out.kovan?.biznos, db = out.ddwm?.biznos;
-  if (kb || db) {
-    const usedAll = new Set([...(kb?.used ?? []), ...(db?.used ?? [])]);
-    const openedAll = new Set([...(kb?.opened ?? []), ...(db?.opened ?? [])]);
-    // 미사용 가맹점 명단 — 미사용 단말기의 사업자번호 중 '사용 가맹점(usedAll)'에 없는 것만(양쪽 VAN 통틀어 미사용)
+  if (kb && db) {
+    const usedAll = new Set([...kb.used, ...db.used]);
+    const openedAll = new Set([...kb.opened, ...db.opened]);
+    // 미사용 가맹점 명단 — 미사용 단말기의 사업자번호 중 '사용 가맹점(usedAll)'에 없는 것만
     const idleByBiz = new Map();
     for (const r of [...(out.kovan?.idleList ?? []), ...(out.ddwm?.idleList ?? [])]) {
       if (!r.bizno || usedAll.has(r.bizno) || idleByBiz.has(r.bizno)) continue;
@@ -171,13 +174,27 @@ async function main() {
     }
     const idleMerchList = [...idleByBiz.entries()].map(([bizno, name]) => ({ bizno, name })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
     out.merchants = {
-      basis: "사업자번호 distinct · 코밴(다인+아무도없개)+다우(다인직접) 통합, KICC 제외",
+      basis: "사업자번호 distinct · 코밴+다우 통합(중복제거) + KICC 수기(+40)",
       kovan: out.kovan?.merch ?? null,
       ddwm: out.ddwm?.merch ?? null,
-      combined: { opened: openedAll.size, used: usedAll.size, idle: [...openedAll].filter((b) => !usedAll.has(b)).length },
+      kicc: KICC_MERCHANTS,
+      combined: {
+        opened: openedAll.size + KICC_MERCHANTS,
+        used: usedAll.size + KICC_MERCHANTS,
+        idle: [...openedAll].filter((b) => !usedAll.has(b)).length,
+      },
       idleList: idleMerchList,
     };
-    console.log(`  ✅ 가맹점 통합(중복제거): 개통 ${out.merchants.combined.opened} · 사용(최근7일) ${out.merchants.combined.used} · 미사용 ${out.merchants.combined.idle}(명단 ${idleMerchList.length})`);
+    console.log(`  ✅ 가맹점 통합: 개통 ${out.merchants.combined.opened} · 사용 ${out.merchants.combined.used} · 미사용 ${out.merchants.combined.idle} (코밴+다우 ${usedAll.size}+KICC ${KICC_MERCHANTS})`);
+  } else if (prev.merchants) {
+    // 한쪽 VAN stale/실패 → 통합 재계산 불가 → 이전 통합값 유지(최신 per-VAN만 반영)
+    out.merchants = {
+      ...prev.merchants,
+      kovan: out.kovan?.merch ?? prev.merchants.kovan,
+      ddwm: out.ddwm?.merch ?? prev.merchants.ddwm,
+      stale: true,
+    };
+    console.log(`  ⚠️ 한쪽 VAN stale — 이전 가맹점 통합값 유지: 개통 ${out.merchants.combined?.opened} · 사용 ${out.merchants.combined?.used}`);
   }
   // 원본 사업자번호 배열은 저장 파일에서 제거(용량·민감도)
   if (out.kovan) delete out.kovan.biznos;

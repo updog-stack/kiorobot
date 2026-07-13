@@ -315,7 +315,7 @@ function MerchantCard({ m }: { m: MerchantsSummary }) {
         />
       )}
       <div className="tcard__basis">
-        운영 기준 코밴 {m.kovan?.used?.toLocaleString("ko-KR") ?? "-"} · 다우 {m.ddwm?.used?.toLocaleString("ko-KR") ?? "-"} (사업자번호 distinct · 양쪽 사용 가맹점 중복 제거 · KICC 제외)
+        운영 기준 코밴 {m.kovan?.used?.toLocaleString("ko-KR") ?? "-"} · 다우 {m.ddwm?.used?.toLocaleString("ko-KR") ?? "-"}{m.kicc ? ` · KICC ${m.kicc}` : ""} (사업자번호 distinct · 코밴·다우 중복 제거 + KICC 수기)
       </div>
     </div>
   );
