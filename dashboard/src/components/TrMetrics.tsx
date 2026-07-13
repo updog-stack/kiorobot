@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, type CSSProperties } from "react";
 import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries } from "../lib/tr";
-import { kicc as kiccSeries, cms as cmsSeries, YEAR, PREV_YEAR } from "../lib/overview";
+import { kicc as kiccSeries, cms as cmsSeries, YEAR, PREV_YEAR, KICC_AMOUNT } from "../lib/overview";
 import { fetchCms } from "../lib/cms";
 import { won, growth } from "../lib/format";
 import { MonthBars } from "./Overview";
@@ -214,6 +214,7 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   // KICC(정적·참고값): 연도별 월 배열. 자동수집 대상이 아니라 코밴/다우 series 에 없어 여기서 합침.
   const kiccOf = (yr: number) => (yr === YEAR ? kiccSeries.cur : yr === PREV_YEAR ? kiccSeries.prev : []);
   const kiccCur = kiccOf(year);
+  const kiccAmtCur = KICC_AMOUNT[year] ?? []; // KICC 월별 결제금액(올해만 제공)
 
   // 선택 년도만 필터. 코밴 금액은 filled(실측+추정) 사용, kEst=추정 여부. total = 코밴+다우+KICC(건수)
   const rows = series.months
@@ -228,12 +229,13 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
         total: series.totalCount[i] + kicc,
         amt: series.ddwmAmount[i],
         kAmt: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0,
+        kAmtKicc: kiccAmtCur[m - 1] ?? 0,
         kEst: series.kovanAmountEst?.[i] ?? false,
       };
     })
     .filter((_, i) => series.months[i].startsWith(`${year}-`));
   const maxCnt = Math.max(1, ...rows.map((r) => r.total));
-  const maxAmt = Math.max(1, ...rows.map((r) => r.amt + r.kAmt)); // 코밴+다우 스택 기준
+  const maxAmt = Math.max(1, ...rows.map((r) => r.amt + r.kAmt + r.kAmtKicc)); // 코밴+다우+KICC 스택 기준
   const yTotalCnt = rows.reduce((s, r) => s + r.total, 0);
   const yKovanCnt = rows.reduce((s, r) => s + r.kovan, 0);
   const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
@@ -363,26 +365,27 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
       </section>
       )}
 
-      {/* 금액 — 코밴 + 다우 스택 */}
+      {/* 금액 — 코밴 + 다우 + KICC 스택 */}
       <section className="card card--wide">
         <h2 className="card__title">
-          {year}년 월별 결제 금액 — 코밴 + 다우데이타{" "}
+          {year}년 월별 결제 금액 — 코밴 + 다우데이타 + KICC{" "}
           <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}>(코밴은 카드 신용+체크·100만원 절삭 근사)</span>
         </h2>
         <div className="chart">
           {rows.map((r) => {
-            const tot = r.amt + r.kAmt;
+            const tot = r.amt + r.kAmt + r.kAmtKicc;
             return (
               <div className="chart__col" key={r.m}>
                 <div style={valLabel}>{eokShort(tot)}</div>
                 <div
                   className="chart__bars"
                   style={{ gap: 0 }}
-                  title={`${r.m}월: 합계 ${tot.toLocaleString()}원 (코밴 ${r.kAmt.toLocaleString()}${r.kEst ? " 예측" : ""} · 다우 ${r.amt.toLocaleString()})`}
+                  title={`${r.m}월: 합계 ${tot.toLocaleString()}원 (코밴 ${r.kAmt.toLocaleString()}${r.kEst ? " 예측" : ""} · 다우 ${r.amt.toLocaleString()} · KICC ${r.kAmtKicc.toLocaleString()})`}
                 >
                   <div style={{ width: "58%", maxWidth: 28, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
                     {barCol((r.amt / maxAmt) * 100, "#f59e0b", { borderRadius: "4px 4px 0 0" })}
                     {barCol((r.kAmt / maxAmt) * 100, "#7c6df2", r.kEst ? { opacity: 0.4 } : {})}
+                    {barCol((r.kAmtKicc / maxAmt) * 100, "#22c55e")}
                   </div>
                 </div>
                 <div className="chart__xlabel">{r.m}월{r.kEst ? "˚" : ""}</div>
@@ -393,6 +396,7 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
         <div className="chart__legend">
           <span><i className="dot" style={{ background: "#7c6df2" }} /> 코밴(카드·근사)</span>
           <span><i className="dot" style={{ background: "#f59e0b" }} /> 다우데이타</span>
+          <span><i className="dot" style={{ background: "#22c55e" }} /> KICC</span>
           {yearHasEst && <span style={{ color: "var(--muted)" }}>˚ 옅은 보라 = 건수기반 예측(미수집 월)</span>}
         </div>
       </section>

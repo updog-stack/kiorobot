@@ -98,6 +98,11 @@ export const kovan: Mseries = {
   ],
 };
 
+// KICC 월별 결제금액(원) — 수기 참고값. 올해(2026)만 제공, 작년은 미제공.
+export const KICC_AMOUNT: Record<number, number[]> = {
+  2026: [251_730_244, 219_231_888, 238_367_919, 243_307_274, 226_301_581, 228_540_331],
+};
+
 export const kicc: Mseries = {
   key: "kicc",
   label: "KICC",
