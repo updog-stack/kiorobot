@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@notionhq/client": "^5.22.0",
+    "@tensorflow/tfjs": "^4.11.0",
+    "@upscalerjs/esrgan-slim": "^1.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -22,6 +24,7 @@
     "playwright": "^1.61.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "upscaler": "^1.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
