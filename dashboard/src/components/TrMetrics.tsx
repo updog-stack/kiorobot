@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, type CSSProperties } from "react";
 import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries } from "../lib/tr";
-import { kicc as kiccSeries, cms as cmsSeries } from "../lib/overview";
+import { kicc as kiccSeries, cms as cmsSeries, YEAR, PREV_YEAR } from "../lib/overview";
 import { fetchCms } from "../lib/cms";
 import { won, growth } from "../lib/format";
 import { MonthBars } from "./Overview";
@@ -211,23 +211,33 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   );
   const valLabel: CSSProperties = { fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 3, whiteSpace: "nowrap", lineHeight: 1 };
 
-  // 선택 년도만 필터. 코밴 금액은 filled(실측+추정) 사용, kEst=추정 여부
+  // KICC(정적·참고값): 연도별 월 배열. 자동수집 대상이 아니라 코밴/다우 series 에 없어 여기서 합침.
+  const kiccOf = (yr: number) => (yr === YEAR ? kiccSeries.cur : yr === PREV_YEAR ? kiccSeries.prev : []);
+  const kiccCur = kiccOf(year);
+
+  // 선택 년도만 필터. 코밴 금액은 filled(실측+추정) 사용, kEst=추정 여부. total = 코밴+다우+KICC(건수)
   const rows = series.months
-    .map((ym, i) => ({
-      m: Number(ym.slice(5, 7)),
-      kovan: series.kovanCount[i],
-      ddwm: series.ddwmCount[i],
-      total: series.totalCount[i],
-      amt: series.ddwmAmount[i],
-      kAmt: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0,
-      kEst: series.kovanAmountEst?.[i] ?? false,
-    }))
+    .map((ym, i) => {
+      const m = Number(ym.slice(5, 7));
+      const kicc = kiccCur[m - 1] ?? 0;
+      return {
+        m,
+        kovan: series.kovanCount[i],
+        ddwm: series.ddwmCount[i],
+        kicc,
+        total: series.totalCount[i] + kicc,
+        amt: series.ddwmAmount[i],
+        kAmt: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0,
+        kEst: series.kovanAmountEst?.[i] ?? false,
+      };
+    })
     .filter((_, i) => series.months[i].startsWith(`${year}-`));
   const maxCnt = Math.max(1, ...rows.map((r) => r.total));
   const maxAmt = Math.max(1, ...rows.map((r) => r.amt + r.kAmt)); // 코밴+다우 스택 기준
   const yTotalCnt = rows.reduce((s, r) => s + r.total, 0);
   const yKovanCnt = rows.reduce((s, r) => s + r.kovan, 0);
   const yDdwmCnt = rows.reduce((s, r) => s + r.ddwm, 0);
+  const yKiccCnt = rows.reduce((s, r) => s + r.kicc, 0);
   const yTotalAmt = rows.reduce((s, r) => s + r.amt, 0);
   const yKovanAmt = rows.reduce((s, r) => s + r.kAmt, 0);
   const yearHasEst = rows.some((r) => r.kEst);
@@ -235,8 +245,9 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   // 직전 년도 '동기간'(같은 월들) 합계 → 증감률
   const curMonthNums = rows.map((r) => r.m);
   const prevYear = year - 1;
+  const kiccPrev = kiccOf(prevYear);
   const prevRows = series.months
-    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), total: series.totalCount[i], amt: series.ddwmAmount[i], ym }))
+    .map((ym, i) => ({ m: Number(ym.slice(5, 7)), total: series.totalCount[i] + (kiccPrev[Number(ym.slice(5, 7)) - 1] ?? 0), amt: series.ddwmAmount[i], ym }))
     .filter((x) => x.ym.startsWith(`${prevYear}-`) && curMonthNums.includes(x.m));
   const hasPrev = prevRows.length > 0;
   const prevCnt = prevRows.reduce((s, r) => s + r.total, 0);
@@ -287,7 +298,7 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
             <div className="metric__label">{year} 결제 건수</div>
             <div className="metric__amount">{cnt(yTotalCnt)}</div>
             {compare(gCnt, cnt(prevCnt))}
-            <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)}</div>
+            <div className="metric__hint">코밴 {cnt(yKovanCnt)} · 다우 {cnt(yDdwmCnt)} · KICC {cnt(yKiccCnt)}</div>
           </section>
         )}
         <section className="metric">
@@ -324,7 +335,7 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
       {/* 건수 — 코밴 + 다우 스택 (매출현황에선 숨김) */}
       {!amountOnly && (
       <section className="card card--wide">
-        <h2 className="card__title">{year}년 월별 결제 건수 — 코밴 + 다우데이타</h2>
+        <h2 className="card__title">{year}년 월별 결제 건수 — 코밴 + 다우데이타 + KICC</h2>
         <div className="chart">
           {rows.map((r) => (
             <div className="chart__col" key={r.m}>
@@ -332,11 +343,12 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
               <div
                 className="chart__bars"
                 style={{ gap: 0 }}
-                title={`${r.m}월: 합계 ${r.total.toLocaleString()}건 (코밴 ${r.kovan.toLocaleString()} · 다우 ${r.ddwm.toLocaleString()})`}
+                title={`${r.m}월: 합계 ${r.total.toLocaleString()}건 (코밴 ${r.kovan.toLocaleString()} · 다우 ${r.ddwm.toLocaleString()} · KICC ${r.kicc.toLocaleString()})`}
               >
                 <div style={{ width: "58%", maxWidth: 28, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
                   {barCol((r.ddwm / maxCnt) * 100, "#4dd0c4", { borderRadius: "4px 4px 0 0" })}
                   {barCol((r.kovan / maxCnt) * 100, "#7c6df2")}
+                  {barCol((r.kicc / maxCnt) * 100, "#f59e0b")}
                 </div>
               </div>
               <div className="chart__xlabel">{r.m}월</div>
@@ -346,6 +358,7 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
         <div className="chart__legend">
           <span><i className="dot" style={{ background: "#7c6df2" }} /> 코밴</span>
           <span><i className="dot" style={{ background: "#4dd0c4" }} /> 다우데이타</span>
+          <span><i className="dot" style={{ background: "#f59e0b" }} /> KICC(참고)</span>
         </div>
       </section>
       )}
