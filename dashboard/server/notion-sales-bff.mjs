@@ -561,6 +561,18 @@ app.post("/api/inactive/check", async (_req, res) => {
   }
 });
 
+// 임의 사업자번호 목록의 국세청 상태(계속/휴업/폐업) 조회 — 미사용 매장 명단 등에서 사용
+app.post("/api/biz-status", async (req, res) => {
+  try {
+    const bizNos = Array.isArray(req.body?.bizNos) ? req.body.bizNos : [];
+    if (!bizNos.length) return res.json({ status: {} });
+    const status = await checkBusinessStatus(bizNos);
+    res.json({ status });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 // 수동 동기화 — 스크래퍼 실행 후 결과 반환 (.env 자격증명은 자식이 새로 읽도록 제거)
 const CRED_KEYS = [
   "KOVAN_ID", "KOVAN_PW", "KOVAN_AGENCY", "KOVAN_TRAN",

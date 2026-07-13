@@ -44,3 +44,20 @@ export async function fetchTerminals(): Promise<TerminalUsage> {
   if (!r.ok) throw new Error("terminals " + r.status);
   return (await r.json()) as TerminalUsage;
 }
+
+// 국세청 사업자상태(계속/휴업/폐업) — 임의 사업자번호 목록 조회
+export interface BizStatus {
+  b_stt: string; // 계속사업자 | 휴업자 | 폐업자 | ""
+  b_stt_cd: string; // 01 | 02 | 03
+  end_dt: string; // 폐업일 YYYYMMDD
+}
+export async function fetchBizStatus(bizNos: string[]): Promise<Record<string, BizStatus>> {
+  const r = await fetch("/api/biz-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bizNos }),
+  });
+  if (!r.ok) return {};
+  const j = await r.json();
+  return (j.status ?? {}) as Record<string, BizStatus>;
+}

@@ -3,7 +3,7 @@ import { won, growth } from "../lib/format";
 import { fetchCms } from "../lib/cms";
 import { fetchSalesMonthly, type SalesMonthly } from "../lib/sales";
 import { fetchTr, trMonthly, type TrData } from "../lib/tr";
-import { fetchTerminals, type TerminalUsage, type VanTerminals, type MerchantsSummary } from "../lib/terminals";
+import { fetchTerminals, fetchBizStatus, type TerminalUsage, type VanTerminals, type MerchantsSummary, type BizStatus } from "../lib/terminals";
 import {
   YEAR,
   PREV_YEAR,
@@ -254,10 +254,32 @@ export function TotalSalesChart({
 
 // 사업자번호 10자리 → XXX-XX-XXXXX
 const fmtBiz = (b: string) => (b && /^\d{10}$/.test(b) ? `${b.slice(0, 3)}-${b.slice(3, 5)}-${b.slice(5)}` : b || "-");
+const fmtDt = (d: string) => (d && d.length === 8 ? `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6)}` : d);
+// 국세청 상태 → 라벨/색
+function bizStatusLabel(s?: BizStatus): { text: string; color: string } {
+  if (!s || !s.b_stt) return { text: "-", color: "var(--muted)" };
+  if (s.b_stt_cd === "03" || s.b_stt.includes("폐업")) return { text: s.end_dt ? `폐업 (${fmtDt(s.end_dt)})` : "폐업", color: "#dc2626" };
+  if (s.b_stt_cd === "02" || s.b_stt.includes("휴업")) return { text: "휴업", color: "#d97706" };
+  return { text: "정상", color: "#16a34a" };
+}
 
-// 미사용 명단 모달(상호/사업자번호). 단말기 명단은 단말기번호 컬럼 표시, 가맹점 명단은 생략.
+// 미사용 명단 모달(상호/사업자번호 + 국세청 폐업여부). 단말기 명단은 단말기번호 컬럼 표시.
 function IdleModal({ title, list, note, onClose }: { title: string; list: Array<{ tid?: string; bizno: string; name: string }>; note?: string; onClose: () => void }) {
   const hasTid = list.some((x) => x.tid);
+  const [status, setStatus] = useState<Record<string, BizStatus>>({});
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    const biznos = [...new Set(list.map((x) => x.bizno).filter(Boolean))];
+    fetchBizStatus(biznos)
+      .then((s) => alive && setStatus(s))
+      .catch(() => {})
+      .finally(() => alive && setChecking(false));
+    return () => {
+      alive = false;
+    };
+  }, [list]);
+
   return (
     <div className="idle-modal" onClick={onClose}>
       <div className="idle-modal__box" onClick={(e) => e.stopPropagation()}>
@@ -268,16 +290,22 @@ function IdleModal({ title, list, note, onClose }: { title: string; list: Array<
         {note && <div className="idle-modal__note">{note}</div>}
         <div className="idle-modal__list">
           <table>
-            <thead><tr><th>#</th><th>상호명</th><th>사업자번호</th>{hasTid && <th>단말기번호</th>}</tr></thead>
+            <thead><tr><th>#</th><th>상호명</th><th>사업자번호</th><th>폐업여부</th>{hasTid && <th>단말기번호</th>}</tr></thead>
             <tbody>
-              {list.map((x, i) => (
-                <tr key={(x.tid ?? x.bizno) + "_" + i}>
-                  <td>{i + 1}</td>
-                  <td>{x.name || "-"}</td>
-                  <td>{fmtBiz(x.bizno)}</td>
-                  {hasTid && <td>{x.tid}</td>}
-                </tr>
-              ))}
+              {list.map((x, i) => {
+                const st = bizStatusLabel(status[x.bizno]);
+                return (
+                  <tr key={(x.tid ?? x.bizno) + "_" + i}>
+                    <td>{i + 1}</td>
+                    <td>{x.name || "-"}</td>
+                    <td>{fmtBiz(x.bizno)}</td>
+                    <td style={{ color: st.color, fontWeight: st.text.startsWith("폐업") ? 700 : 400, whiteSpace: "nowrap" }}>
+                      {checking ? "조회 중…" : st.text}
+                    </td>
+                    {hasTid && <td>{x.tid}</td>}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
