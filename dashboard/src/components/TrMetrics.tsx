@@ -79,6 +79,25 @@ export function TrMetrics() {
       : { monthly: [], total: 0, avg: 0 };
   }, [aug, scope]);
 
+  // 선택 VAN(scope)의 현재 연도 월별 결제금액 — series(코밴/다우) + KICC 정적값
+  const amtByMonth = useMemo(() => {
+    const map = new Map<number, number>();
+    const s = data?.series;
+    const yr = data?.year;
+    if (!s || !yr) return map;
+    s.months.forEach((ym, i) => {
+      if (!ym.startsWith(`${yr}-`)) return;
+      const mo = Number(ym.slice(5, 7));
+      const kov = s.kovanAmountFilled?.[i] ?? s.kovanAmount?.[i] ?? 0;
+      const dao = s.ddwmAmount?.[i] ?? 0;
+      const kic = KICC_AMOUNT[yr]?.[mo - 1] ?? 0;
+      const v =
+        scope === "all" ? kov + dao + kic : scope === "KOVAN" ? kov : scope === "DAOUDATA" ? dao : scope === "KICC" ? kic : 0;
+      map.set(mo, v);
+    });
+    return map;
+  }, [data, scope]);
+
   const syncButton = (
     <button className="sync-btn" onClick={handleSync} disabled={syncing}>
       {syncing ? "동기화 중…" : "↻ 지금 동기화"}
@@ -95,6 +114,12 @@ export function TrMetrics() {
   if (!data || !aug) return <div className="state">TR현황 데이터를 불러오는 중…</div>;
 
   const currentMonth = view.monthly.length ? view.monthly[view.monthly.length - 1] : null;
+  // 금액 집계(선택 VAN)
+  const amtTotal = view.monthly.reduce((s, m) => s + (amtByMonth.get(m.month) ?? 0), 0);
+  const amtAvg = view.monthly.length ? amtTotal / view.monthly.length : 0;
+  const thisMonthAmt = currentMonth ? amtByMonth.get(currentMonth.month) ?? 0 : 0;
+  const amtMonthly = view.monthly.map((m) => ({ month: m.month, amount: amtByMonth.get(m.month) ?? 0 }));
+  const scopeLabel = scope === "all" ? "합산(코밴+다우데이타+KICC)" : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
   return (
     <div className="sales">
@@ -141,15 +166,37 @@ export function TrMetrics() {
           <div className="metric__amount">{currentMonth ? cnt(currentMonth.count) : "-"}</div>
           <div className="metric__hint">{currentMonth ? `${currentMonth.month}월 (오늘까지)` : "데이터 없음"}</div>
         </section>
+        <section className="metric">
+          <div className="metric__label">총 결제금액</div>
+          <div className="metric__amount">{won(amtTotal)}</div>
+          <div className="metric__hint">{scope === "KOVAN" ? "카드·절삭 근사" : scope === "KICC" ? "KICC 수기" : scopeLabel}</div>
+        </section>
+        <section className="metric">
+          <div className="metric__label">월 평균 금액</div>
+          <div className="metric__amount">{won(amtAvg)}</div>
+          <div className="metric__hint">{view.monthly.length}개월 평균</div>
+        </section>
+        <section className="metric">
+          <div className="metric__label">이번달 금액</div>
+          <div className="metric__amount">{won(thisMonthAmt)}</div>
+          <div className="metric__hint">{currentMonth ? `${currentMonth.month}월 (오늘까지)` : "데이터 없음"}</div>
+        </section>
       </div>
 
       <section className="card card--wide">
-        <h2 className="card__title">
-          월별 거래 건수 —{" "}
-          {scope === "all" ? "합산(코밴+다우데이타+KICC)" : aug.vans.find((v) => v.van === scope)?.label}
-        </h2>
+        <h2 className="card__title">월별 거래 건수 — {scopeLabel}</h2>
         <Chart monthly={view.monthly} />
       </section>
+
+      {amtTotal > 0 && (
+        <section className="card card--wide">
+          <h2 className="card__title">
+            월별 결제 금액 — {scopeLabel}
+            {scope === "KOVAN" && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}> (카드 신용+체크·100만원 절삭 근사)</span>}
+          </h2>
+          <AmtChart monthly={amtMonthly} />
+        </section>
+      )}
 
       {scope === "KICC" && (
         <div className="table-meta">※ KICC는 자동수집 대상이 아니며 구글시트 참고값(정적)입니다.</div>
@@ -176,6 +223,32 @@ function Chart({ monthly }: { monthly: TrMonth[] }) {
                 style={{ height: `${(m.count / max) * 100}%` }}
                 title={`${m.month}월: ${cnt(m.count)}${isCurrent ? " (진행 중)" : ""}`}
               />
+            </div>
+            <div className="chart__xlabel">
+              {m.month}월{isCurrent ? "*" : ""}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 월별 결제 금액 차트(선택 VAN) — 억/만 라벨
+function AmtChart({ monthly }: { monthly: { month: number; amount: number }[] }) {
+  const max = Math.max(1, ...monthly.map((m) => m.amount));
+  const fmtA = (w: number) => (w >= 1e8 ? `${(w / 1e8).toFixed(1)}억` : w >= 1e4 ? `${Math.round(w / 1e4).toLocaleString()}만` : `${w}`);
+  return (
+    <div className="chart">
+      {monthly.map((m, i) => {
+        const isCurrent = i === monthly.length - 1;
+        return (
+          <div className="chart__col" key={m.month}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 3, whiteSpace: "nowrap", lineHeight: 1 }}>
+              {m.amount ? fmtA(m.amount) : ""}
+            </div>
+            <div className="chart__bars" title={`${m.month}월: ${m.amount.toLocaleString()}원`}>
+              <div className="chart__bar chart__bar--cur" style={{ height: `${(m.amount / max) * 100}%`, background: "#f59e0b" }} />
             </div>
             <div className="chart__xlabel">
               {m.month}월{isCurrent ? "*" : ""}
