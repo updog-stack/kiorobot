@@ -40,7 +40,7 @@ const pctTxt = (p: number | null) => (p == null ? "비교 불가" : `${p >= 0 ? 
 const toneOf = (p: number | null) => (p == null ? "muted" : p > 0.5 ? "up" : p < -0.5 ? "down" : "flat");
 
 // VAN 결제금액 시리즈(코밴 filled + 다우) — 올해 vs 작년, /api/tr 라이브
-function vanAmtSeries(tr: TrData): Mseries {
+export function vanAmtSeries(tr: TrData): Mseries {
   const s = tr.series;
   const byYear = (yr: number) => {
     const arr = Array(12).fill(0);
@@ -139,7 +139,7 @@ export function ManagementMetrics() {
 }
 
 // ===== 성과 점수판 (작년=100점) =====
-function Scoreboard({ metrics }: { metrics: { s: Mseries; icon: string }[] }) {
+export function Scoreboard({ metrics }: { metrics: { s: Mseries; icon: string }[] }) {
   const cards = metrics.map(({ s, icon }) => ({ s, icon, sc: scorecard(s) }));
   const scored = cards.filter((c) => c.sc.ytdScore != null);
   const overall = scored.length

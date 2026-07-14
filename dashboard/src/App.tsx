@@ -6,7 +6,6 @@ import { getSession, logout } from "./lib/auth";
 import { WorkHub } from "./components/WorkHub";
 import { Overview } from "./components/Overview";
 import { Schedule } from "./components/Schedule";
-import { ManagementMetrics } from "./components/ManagementMetrics";
 import { AiSupport } from "./components/AiSupport";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
@@ -17,8 +16,7 @@ import "./App.css";
 const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
   { key: "sales", label: "매출현황", icon: "💰" },
-  { key: "tr", label: "거래(TR) 현황", icon: "💳" },
-  { key: "metrics", label: "경영 지표", icon: "📈" },
+  { key: "tr", label: "VAN 거래현황", icon: "💳" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "work", label: "업무현황", icon: "✅" },
   { key: "marketing", label: "마케팅 현황", icon: "📣" },
@@ -119,12 +117,6 @@ function App() {
           )}
 
           {active === "work" && <WorkHub />}
-
-          {active === "metrics" && (
-            <div className="full">
-              <ManagementMetrics />
-            </div>
-          )}
 
           {active === "tr" && (
             <div className="full">

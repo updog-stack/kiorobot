@@ -29,7 +29,9 @@ export interface MerchantsSummary {
   ddwm: MerchCount | null;
   kicc?: number; // KICC 가맹점 수(단말기 미수집 · 수기 반영)
   combined: MerchCount; // 코밴+다우 중복 제거 + KICC
-  idleList?: IdleMerchant[]; // 미사용 가맹점(7일 미결제) 명단 — 상호/사업자번호
+  idleList?: IdleMerchant[]; // 통합 미사용 가맹점(7일 미결제) 명단 — 상호/사업자번호
+  kovanIdle?: IdleMerchant[]; // 코밴 미사용 가맹점 명단
+  ddwmIdle?: IdleMerchant[]; // 다우 미사용 가맹점 명단
 }
 export interface TerminalUsage {
   updatedAt: string | null;
@@ -43,6 +45,36 @@ export async function fetchTerminals(): Promise<TerminalUsage> {
   const r = await fetch("/api/terminals");
   if (!r.ok) throw new Error("terminals " + r.status);
   return (await r.json()) as TerminalUsage;
+}
+
+// 신규 가맹점 개설 추이(개설일 기준) — 코밴+다우 중복제거, 연도별 월별
+export interface MerchantOpenings {
+  updatedAt: string | null;
+  combined: Record<string, number[]>; // 전체 개설(모두) — 신규 개설 추이용 { "2025": number[12], ... }
+  operating?: Record<string, number[]>; // 현재 운영 기준 — 전체 가맹점 누적용(현재월→842)
+  kovan?: Record<string, number[]>;
+  ddwm?: Record<string, number[]>;
+  totalMerchants?: number;
+  note?: string;
+}
+export async function fetchMerchantOpenings(): Promise<MerchantOpenings> {
+  const r = await fetch("/api/merchant-openings");
+  if (!r.ok) throw new Error("merchant-openings " + r.status);
+  return (await r.json()) as MerchantOpenings;
+}
+
+// 누적 거래실적(역대 실제 거래) — 거래 단말기 + 거래 가맹점(사업자번호). 코밴 일자별 + 다우 정산 union
+export interface TotalTriple { total: number; kovan: number; ddwm: number }
+export interface TerminalTotal {
+  updatedAt: string | null;
+  terminals: TotalTriple; // 거래 단말기 수
+  merchants: TotalTriple; // 거래 가맹점(사업자번호) 수
+  note?: string;
+}
+export async function fetchTerminalTotal(): Promise<TerminalTotal | null> {
+  const r = await fetch("/api/terminal-total");
+  if (!r.ok) return null;
+  return (await r.json()) as TerminalTotal;
 }
 
 // 국세청 사업자상태(계속/휴업/폐업) — 임의 사업자번호 목록 조회

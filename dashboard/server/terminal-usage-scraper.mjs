@@ -121,17 +121,24 @@ async function ddwmTerminals(browser) {
   const page = await (await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })).newPage();
   await ddwmLogin(page);
   const now = new Date();
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const ymOf = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+  const thisMonth = ymOf(now);
+  const lastMonth = ymOf(new Date(now.getFullYear(), now.getMonth() - 1, 1));
 
-  // 이번달 활동 단말기(정산내역) — 최근 운영 중인 다인 직접관리 단말기 집합
-  const gt = await ddwmGrab(page, "https://van.daoudata.co.kr/pview/Bill/partner/frmBill_Trml", async () => {
-    await page.fill("#selectMonth", month).catch(() => {});
-  });
-  const ht = findHdr(gt); const hdrT = gt[ht].map((c) => String(c).replace(/\s/g, ""));
-  const cTid = hdrT.findIndex((c) => c.includes("단말기번호"));
-  const cBiz = hdrT.findIndex((c) => c.includes("사업자번호"));
+  // 최근 30일 활동 단말기 — 이번달 + 지난달 정산내역을 합쳐 롤링 30일(다인 직접관리) 근사.
+  //   (이번달만 보면 월 초에는 며칠치뿐이므로 지난달 분을 합쳐 30일 창을 채운다)
   const monthActive = new Set(); const tBiz = {};
-  for (let i = ht + 1; i < gt.length; i++) { const t = String(gt[i][cTid] ?? "").trim(); if (!/^\d{4,}/.test(t)) continue; monthActive.add(t); if (cBiz >= 0) tBiz[t] = String(gt[i][cBiz] ?? "").trim(); }
+  const grabMonth = async (ym) => {
+    const gt = await ddwmGrab(page, "https://van.daoudata.co.kr/pview/Bill/partner/frmBill_Trml", async () => {
+      await page.fill("#selectMonth", ym).catch(() => {});
+    });
+    const ht = findHdr(gt); const hdrT = gt[ht].map((c) => String(c).replace(/\s/g, ""));
+    const cTid = hdrT.findIndex((c) => c.includes("단말기번호"));
+    const cBiz = hdrT.findIndex((c) => c.includes("사업자번호"));
+    for (let i = ht + 1; i < gt.length; i++) { const t = String(gt[i][cTid] ?? "").trim(); if (!/^\d{4,}/.test(t)) continue; monthActive.add(t); if (cBiz >= 0 && !tBiz[t]) tBiz[t] = String(gt[i][cBiz] ?? "").trim(); }
+  };
+  await grabMonth(thisMonth);
+  await grabMonth(lastMonth);
 
   // 미사용 명단(최근 7일 미결제) — 무실적단말기내역(상호/사업자번호)
   const idleList = (await ddwmIdleList(page)) ?? [];
@@ -185,7 +192,27 @@ async function main() {
       },
       idleList: idleMerchList,
     };
+    // VAN별 가맹점 미사용 명단(최근 7일 무결제) — 단말기 명단을 사업자번호로 dedup, 7일 사용 가맹점 제외
+    const perVanIdle = (list, usedArr) => {
+      const used = new Set(usedArr);
+      const seen = new Map();
+      for (const r of list ?? []) {
+        if (!r.bizno || used.has(r.bizno) || seen.has(r.bizno)) continue;
+        seen.set(r.bizno, r.name);
+      }
+      return [...seen.entries()].map(([bizno, name]) => ({ bizno, name })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    };
+    out.merchants.kovanIdle = perVanIdle(out.kovan?.idleList, kb.used);
+    out.merchants.ddwmIdle = perVanIdle(out.ddwm?.idleList, db.used);
     console.log(`  ✅ 가맹점 통합: 개통 ${out.merchants.combined.opened} · 사용 ${out.merchants.combined.used} · 미사용 ${out.merchants.combined.idle} (코밴+다우 ${usedAll.size}+KICC ${KICC_MERCHANTS})`);
+    // 운영중(최근 30일 결제) 사업자번호 목록 — merchant-openings-scraper가 읽어 '운영 기준 개설추이'로 조인
+    try {
+      await writeFile(join(dirname(OUT), "operating-biznos.json"), JSON.stringify({
+        updatedAt: out.updatedAt,
+        biznos: [...openedAll],                 // 코밴+다우 운영중 사업자번호(distinct)
+        total: out.merchants.combined.opened,   // + KICC 수기 = 전체 운영 가맹점 수
+      }, null, 2));
+    } catch (e) { console.error("  운영 사업자목록 저장 오류:", e.message); }
   } else if (prev.merchants) {
     // 한쪽 VAN stale/실패 → 통합 재계산 불가 → 이전 통합값 유지(최신 per-VAN만 반영)
     out.merchants = {

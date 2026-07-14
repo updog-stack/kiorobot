@@ -393,6 +393,32 @@ app.get("/api/tr", async (_req, res) => {
 
 // 단말기 사용현황(개통/사용/미사용) — terminal-usage-scraper 수집분
 const TERMINAL_JSON = join(__dirname, "data", "terminal-usage.json");
+const MERCH_OPEN_JSON = join(__dirname, "data", "merchant-openings.json");
+const TERMINAL_TOTAL_JSON = join(__dirname, "data", "terminal-total.json");
+app.get("/api/merchant-openings", async (_req, res) => {
+  try {
+    res.json((await readJson(MERCH_OPEN_JSON)) ?? { note: "아직 수집 전 — 매일 08:00 자동수집 후 표시됩니다." });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+// 누적 단말기수(역대 전부) — terminal-total-scraper 수집분
+app.get("/api/terminal-total", async (_req, res) => {
+  try {
+    res.json((await readJson(TERMINAL_TOTAL_JSON)) ?? { note: "아직 수집 전 — 매일 08:00 자동수집 후 표시됩니다." });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+// 아무도없개 매출(2026-06~) — amudo-sales-scraper 수집분(월별 건수·금액)
+const AMUDO_SALES_JSON = join(__dirname, "data", "amudo-sales.json");
+app.get("/api/amudo-sales", async (_req, res) => {
+  try {
+    res.json((await readJson(AMUDO_SALES_JSON)) ?? { months: {} });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
 app.get("/api/terminals", async (_req, res) => {
   try {
     res.json((await readJson(TERMINAL_JSON)) ?? { note: "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동수집 후 표시됩니다." });
@@ -2566,14 +2592,17 @@ const COLLECT_SCRIPTS = [
   "kovan-inactive-scraper.mjs",
   "ddwm-inactive-scraper.mjs",
   "terminal-usage-scraper.mjs",
+  "merchant-openings-scraper.mjs",
+  "terminal-total-scraper.mjs",
+  "amudo-sales-scraper.mjs",
 ];
 
 // 페이지(메뉴)별 수집 스코프 — 수동 '데이터 동기화' 버튼은 현재 화면에 필요한 스크래퍼만 실행.
 //   (매일 8시 자동수집은 COLLECT_SCRIPTS 전체. 노션 매출·유튜브·구글일정 등은 API 실시간이라 스크래퍼 없음)
 const TR_CMS = ["kovan-tr-scraper.mjs", "ddwm-tr-scraper.mjs", "hyosung-cms-scraper.mjs"];
 const COLLECT_SCOPES = {
-  overview: [...TR_CMS, "terminal-usage-scraper.mjs"], // VAN 건수·CMS·단말기/가맹점
-  sales: TR_CMS,                                        // 총매출(노션live)·VAN 결제금액·CMS
+  overview: [...TR_CMS, "terminal-usage-scraper.mjs", "merchant-openings-scraper.mjs", "terminal-total-scraper.mjs"], // VAN·CMS·단말기/가맹점·신규개설·누적단말기
+  sales: [...TR_CMS, "amudo-sales-scraper.mjs"],        // 총매출(노션live)·VAN 결제금액·CMS·아무도없개 매출
   tr: TR_CMS,                                           // 거래 건수·금액·CMS
   metrics: TR_CMS,                                      // 경영지표 요약
   inactive: ["kovan-inactive-scraper.mjs", "ddwm-inactive-scraper.mjs"], // 무실적 가맹점

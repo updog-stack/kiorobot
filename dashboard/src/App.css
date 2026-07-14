@@ -3305,3 +3305,11 @@
   .sales__kpis, .ov__row { gap: 10px; }
   .logout-btn { padding: 7px 10px; font-size: 12px; }
 }
+
+/* 아무도없개 매출 표 */
+.amudo-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.amudo-table th, .amudo-table td { padding: 7px 12px; border-bottom: 1px solid var(--line, #e5e7eb); white-space: nowrap; }
+.amudo-table th { text-align: right; color: var(--muted); font-weight: 600; }
+.amudo-table th:first-child, .amudo-table td:first-child { text-align: left; font-weight: 600; }
+.amudo-table td { text-align: right; font-variant-numeric: tabular-nums; }
+.amudo-table tbody tr:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
