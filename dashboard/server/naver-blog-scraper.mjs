@@ -5,12 +5,17 @@
 import "dotenv/config";
 import { chromium } from "playwright";
 import { writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { pushToServer } from "./lib/push-to-server.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(__dirname, "data", "naver-profile");
+const STATE = join(__dirname, "data", "naver-state.json");
+// 서버(리눅스): NAVER_STATE=1 이면 이식된 storageState 사용(윈도우 프로필은 쿠키암호화로 이식 불가).
+//   로컬(윈도우): 기존 persistent 프로필 사용(세션 유지).
+const USE_STATE = process.env.NAVER_STATE === "1" && existsSync(STATE);
 const OUT = join(__dirname, "data", "naver-blog.json");
 const BLOG_ID = process.env.NAVER_BLOG_ID || "dain_inc";
 const STAT_URL = `https://admin.blog.naver.com/${BLOG_ID}/stat/today`;
@@ -24,7 +29,14 @@ function seriesOf(json, key) {
 }
 
 async function main() {
-  const ctx = await chromium.launchPersistentContext(PROFILE, { headless: false, viewport: { width: 1200, height: 800 }, ignoreHTTPSErrors: true });
+  let browser = null, ctx;
+  if (USE_STATE) {
+    browser = await chromium.launch({ headless: false, args: ["--no-sandbox"] });
+    ctx = await browser.newContext({ storageState: STATE, viewport: { width: 1200, height: 800 }, ignoreHTTPSErrors: true });
+    console.log("· storageState 모드(서버)");
+  } else {
+    ctx = await chromium.launchPersistentContext(PROFILE, { headless: false, viewport: { width: 1200, height: 800 }, ignoreHTTPSErrors: true });
+  }
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   const cap = {};
   ctx.on("response", async (r) => {
@@ -64,6 +76,7 @@ async function main() {
     console.error("❌", e.message);
   } finally {
     await ctx.close();
+    if (browser) await browser.close();
   }
 }
 main();
