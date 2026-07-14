@@ -119,7 +119,8 @@ erp/
 
 > 버전별 상세 문서: **[v1.49](docs/v1.49.md)** · [v1.48](docs/v1.48.md) · [v1.47](docs/v1.47.md) · [v1.46](docs/v1.46.md) · [v1.45](docs/v1.45.md) · [v1.44](docs/v1.44.md) · [v1.43](docs/v1.43.md) · [v1.42](docs/v1.42.md) · [v1.41](docs/v1.41.md) · [v1.40](docs/v1.40.md) · [v1.30](docs/v1.30.md) · [v1.20](docs/v1.20.md) · [v1.11](docs/v1.11.md) · [v1.10](docs/v1.10.md) · [v1.3](docs/v1.3.md) · [v1.2](docs/v1.2.md) · [v1.0](docs/v1.0.md) · [v0.1](docs/v0.1.md) (각 버전의 기능·파일별 변경 내역)
 >
-> 버전 규칙: **대시보드 메뉴 1개당 버전 1 증가**(메뉴 11개 → v1.11). v1.20~v1.42는 새 메뉴 없이 고도화한 기능 릴리스, v1.43 '마케팅 현황' 메뉴 추가, v1.44 메뉴 통합 정리, v1.45 '매출현황' 메뉴 신설, v1.46 마케팅 자동수집·UX 고도화, v1.47 경영지표 재설계·모바일 반응형, v1.48 '이미지 리사이저' 메뉴 신설, **v1.49 가맹점·단말기 거래실적 재정비·아무도없개 매출 자동수집**(새 메뉴 없는 고도화).
+> 버전 규칙(v1.49~ 갱신): **버전+태그+문서는 "의미 있는 릴리스"에만** — 새 메뉴 신설, 또는 여러 기능을 묶은 큰 개편일 때. **작은 수정·버그픽스·문구 변경은 그냥 커밋**(새 태그·문서 없음, 커밋 메시지가 이력). 태그 난립을 막기 위한 정책입니다.
+> (과거 규칙: 메뉴 1개당 +1 → v1.11, 이후 릴리스마다 소수점 증가. v1.43 마케팅·v1.45 매출현황·v1.48 이미지 리사이저 메뉴 신설, v1.49 가맹점·단말기 거래실적 재정비+아무도없개 매출 자동수집.)
 
 ### [v1.49](docs/v1.49.md) (2026-07-14)
 - **가맹점 사용현황 30일 통일**: 코밴·다우·전체 카드를 **사업자번호(가맹점)·최근 30일 결제** 기준으로 통일(예전엔 코밴/다우가 단말기 수). 최근미결제(7일) 클릭 시 명단
@@ -158,106 +159,7 @@ erp/
 - **단말기 미사용 드릴다운** + 다우 **7일 미결제 기준 통일**(코밴과 동일). **데이터 동기화 = 현재 화면만**(전체는 매일 08:00)
 - 주요 파일: `SalesStatus.tsx`, `terminal-usage-scraper.mjs`(가맹점 집계), `TrMetrics.tsx`, `Overview.tsx`, `SyncButton.tsx`
 
-### [v1.44](docs/v1.44.md) (2026-07-09)
-- **좌측 메뉴 통합**: CS현황·업무현황·업무일지 → **업무현황**(탭), 꿀팁게시판·블로그검사기·프롬프트생성기 → **AI 업무지원**(탭). 좌측 8개로 정리
-- **코밴 결제금액**: 거래(TR) 현황 월별 결제 추이의 금액 그래프를 **코밴+다우 스택**으로 + '결제 금액(코밴)' KPI. 코밴은 카드(신용+체크)·100만원 절삭·1천원 이하 제외 **근사치**(포털이 정확 총액 미제공)
-- 주요 파일: `WorkHub.tsx`·`AiSupport.tsx`, `kovan-tr-scraper.mjs`(fixedrate 금액), `notion-sales-bff.mjs`(kovanAmount), `TrMetrics.tsx`
-
-### [v1.43](docs/v1.43.md) (2026-07-09)
-- **마케팅 현황 (새 메뉴)**: 🥕당근마켓 광고(광고캐시·노출·클릭·CTR·지출), 📺유튜브(전체현황에서 이동), 📝네이버 블로그(일별 조회수·추이) — 전체보기 탭
-- **단말기 사용현황 (전체현황)**: VAN별 개통/사용(최근7일)/휴면 — 코밴 정밀7일, 다우 일별누적
-- 당근/네이버는 인증(SMS·SSO·세션)상 무인 자동수집 불가 → 로컬 세션 방식(.bat, 창 뜸)
-- 주요 파일: `Marketing.tsx`·`DanggeunAds.tsx`·`NaverBlog.tsx`, `terminal-usage-scraper.mjs`·`daangn-ads-daemon.mjs`·`naver-blog-scraper.mjs`, `notion-sales-bff.mjs`(/api/terminals·daangn-ads·naver-blog)
-
-### [v1.42](docs/v1.42.md) (2026-07-08)
-- **전체현황 VAN 건수 실데이터**: 코밴·다우가 고정 샘플(1~5월)이라 5월까지만 나오던 문제 해결 → `/api/tr` 실데이터로 7월까지, 작년 비교도 실데이터(KICC는 정적 참고)
-- **매출 그래프 금액 눈금(Y축)**: 총매출·CMS·VAN 그래프에 좌측 금액 눈금 + 가로 격자선(만/억 자동 전환), 월 기준선 정렬
-- 주요 파일: `Overview.tsx`(VAN 라이브·MonthBars 눈금)·`lib/tr.ts`(trMonthly)·`App.css`(.mchart)
-
-### [v1.41](docs/v1.41.md) (2026-07-07)
-- **개편**: **프롬프트 생성기** — 플랫폼별 '완성 콘텐츠'를 뽑던 방식에서, **AI 채팅창(ChatGPT·Claude)에 붙여넣어 반복 사용하는 '지시문(프롬프트)' 자체를 생성**하는 방식으로 전환. 결과물이 *글*이 아니라 *AI에게 시킬 명령문*
-- **구조**: 분야/주제 + 만들 산출물(블로그·유튜브 영상 스크립트·인스타·틱톡·네이버) + 타겟·페르소나·추가지침 → 역할·목적/우선순위·타겟·정보검증·서술원칙·작성규칙·(영상 선택 시)TTS 호환 규칙·출력형식·금지사항이 짜인 완성 프롬프트를 복사 버튼과 함께 출력
-- **주요 변경 파일**:
-  - `dashboard/server/notion-sales-bff.mjs` — `/api/content-generate` → **`/api/prompt-generate`**(지시문 생성·산출물별 규칙·비용 계산)로 교체
-  - `dashboard/src/lib/promptgen.ts` — 산출물 목록·`generatePrompt()`로 개편
-  - `dashboard/src/components/PromptGen.tsx` — 입력(분야·산출물·타겟·페르소나·추가지침) + 완성 프롬프트 결과·복사 UI
-
-### [v1.40](docs/v1.40.md) (2026-07-07)
-- **CMS 매출 = 효성CMS 실데이터**: 전체현황·거래현황 CMS 매출이 효성CMS 실제 월별 수납액. 스크래퍼 + **이메일 2차인증 자동처리**
-- **총매출 = 노션 실데이터 + 구분 체크박스**: '장비 매출'→'총 매출'(장비·라이선스·기타), 2026 노션 라이브(7월 자동)·2025 시트 실데이터, 그래프 구분 토글
-- **월별 결제추이** 값 라벨 + 전년 동기간 대비, **아무도없개 알림 봇 표시이름**, **전체현황 샘플 카드 제거**
-- **노션 매출 동기화 정확도**: 라이선스·기타 금액·별도가·총액 정상 반영, 수금여부·OK사인·효성CMS 시트값 동기화, 총액 숫자(₩) 통일
-- 주요 파일: `hyosung-cms-scraper.mjs`·`lib/cms.ts`, `notion-sales-bff.mjs`(buildCms·buildSalesMonthly), `Overview.tsx`(총매출 체크박스)·`overview.ts`·`lib/sales.ts`·`TrMetrics.tsx`
-
-### [v1.30](docs/v1.30.md) (2026-07-06)
-- **월별 결제 추이 그래프**: 거래(TR)현황에 2025년~ 월별 결제 건수(코밴+다우) + 결제 금액(다우) 그래프 + 좌측 상단 년도 필터(2027·2028 자동 누적)
-- **다우 결제금액 수집** + 코밴·다우 스크래퍼 다년도 백필
-- **아무도없개 새 상담 슬랙 알림**(이름·태그·콜라인 판별 → 지정인 DM, 3분 폴링)
-- **VAN 계정 노션 자동로드**: 코밴·다우 로그인 비번을 노션 계정표에서 자동 로드(비번 변경=노션 수정, .env 폴백)
-- **CS '오늘 처리'** 인입시각 기준으로 정확화(24h 자동종료 착시 제거), **꿀팁 상담수집 한도 제거**(끝까지 자동 반복), **매출 동기화 복구**(노션 DB ID 갱신)
-- 주요 파일: `TrMetrics.tsx`·`lib/tr.ts`, `kovan/ddwm-tr-scraper.mjs`, `notion-sales-bff.mjs`(series·아무도없개·VAN계정·CS·매출), `csSearch.ts`·`CsSearch.tsx`
-
-### [v1.20](docs/v1.20.md) (2026-07-03)
-- **전체 현황**: **유튜브 채널지표 카드**(구독자·조회수·최근영상) + **데이터 동기화 버튼**·**매일 8시 자동수집**(코밴·다우데이타 스크래퍼)
-- **업무현황**: 노션 협업(협업자·요청자) **관계 그래프**, 담당자별 **내근/외근 직접 변경**·**업무부하 4단계 자동 판정**, **이름 클릭 시 담당 업무 내용 열람**
-- **업무일지**: 매일 19:00 '데일리 브리핑' 신문형 양식(세줄요약·하루의 흐름·구성원별·내일), **캘린더 누적**·**월간 종합**, **PDF 저장 + 대표님 슬랙 전송**
-- **채널톡 일일 리포트**: 서비스별(전화·채널톡·카카오) 인입 + 담당자별 상담 수를 **전부 Open API 자동집계**(수동 입력 제거)
-- **주요 변경 파일**:
-  - `dashboard/server/notion-sales-bff.mjs` — `/api/youtube`·`/api/collect`(+8시 스케줄러)·`/api/staff-location`·`csServiceBreakdown()`·업무일지 PDF/슬랙 전송 엔드포인트
-  - `dashboard/src/components/YoutubeCard.tsx`·`SyncButton.tsx`(신규), `TaskStatus.tsx`·`WorkLog.tsx`(대폭 개편)
-  - `dashboard/src/lib/youtube.ts`·`collect.ts`(신규), `tasks.ts`·`worklog.ts`(확장)
-
-### [v1.11](docs/v1.11.md) (2026-07-03)
-- **추가**: **프롬프트 생성기** 메뉴 — 주제/키워드 하나로 유튜브·인스타그램·틱톡·네이버 블로그에 바로 올릴 완성 콘텐츠(제목·설명/본문·해시태그·태그·노출팁)를 Claude로 생성
-- **최적화**: 플랫폼별 노출 기준 내장(유튜브=검색·추천, 인스타/틱톡=해시태그 도달·추천, 네이버=검색 SEO) + **'노출이 쉽고 잘 되는' 전략**(경쟁 낮은 롱테일·틈새 키워드 우선 배치)
-- **주요 변경 파일**:
-  - `dashboard/src/components/PromptGen.tsx`(신규) — 입력 폼(플랫폼 다중선택·톤·모델) + 플랫폼별 결과 카드(복사 버튼)
-  - `dashboard/src/lib/promptgen.ts`(신규) — 타입·플랫폼/톤/모델 목록·`generateContent()`
-  - `dashboard/server/notion-sales-bff.mjs` — `POST /api/content-generate`(플랫폼별 프롬프트·JSON 파싱·비용 계산) 신규
-  - `dashboard/src/App.tsx` — 내비 `프롬프트 생성기`(🪄) 추가 + 렌더 연결
-
-### [v1.10](docs/v1.10.md) (2026-07-02)
-- **추가**: 업무일지 **직원 직접 작성**(자유기입) — 오후 6시 제한 없이 **언제든**, 원하는 **날짜(과거·오늘·미래 일정)를 지정**해 업무일정/내용을 자유롭게 적고 저장
-- **개선**: 오후 6시 자동 요약은 "참고용"으로 유지, **직접 쓴 내용(note)은 자동 요약이 다시 생성돼도 보존**. "6시에만 열림" 안내 문구 → "언제든 직접 작성" 안내로 교체
-- **주요 변경 파일**:
-  - `dashboard/server/notion-sales-bff.mjs` — `POST /api/worklog/note`(자유기입 저장·임의 날짜) 신규, `generateWorklog` 재생성 시 note 보존
-  - `dashboard/src/lib/worklog.ts` — `note`/`noteUpdatedAt` 필드, `saveWorklogNote()`·`todayIso()` 추가
-  - `dashboard/src/components/WorkLog.tsx` — 날짜 지정 date 입력 + 직접 작성 textarea·저장 UI, 안내 문구 교체
-  - `.gitignore` — `.claude/`(Claude Code 로컬 설정) 추적 제외
-
-### [v1.3](docs/v1.3.md) (2026-06-29)
-- **추가**: 업무현황(노션 업무 DB 실시간 집계·정체 표시·필터) / 업무일지(매일 18:00 자동 생성 + Claude AI 요약 코멘트)
-- **개선**: 빈 "업무 / 할 일" 탭 → **업무현황·업무일지** 두 탭으로 대체
-- **주요 변경 파일**:
-  - `dashboard/server/lib/worklog.mjs`(신규) — 일지 생성 엔진(요약·담당자별·AI 코멘트)
-  - `dashboard/src/components/` — `TaskStatus.tsx`, `WorkLog.tsx`(신규)
-  - `dashboard/src/lib/` — `tasks.ts`, `worklog.ts`(신규)
-  - `dashboard/server/notion-sales-bff.mjs` — `/api/tasks`·`/api/worklog`·`/api/worklog/generate` + 18:00 자동생성 스케줄러
-  - `dashboard/src/App.tsx`
-
-### [v1.2](docs/v1.2.md) (2026-06-29)
-- **추가**: 로그인(접근제어) / 블로그 검사기(Claude SEO 분석) / AI 상담 검색(기간 수집·중복 제외) / 꿀팁게시판 미디어 첨부
-- **보안**: 외부 서버 오픈 대비 — 앱 내장 로그인(공유 비밀번호·세션 쿠키)으로 `/api/*` 전체 보호, 로그인 rate limit·보안 헤더, CORS 닫음 (의존성 추가 없음)
-- **개선**: 꿀팁게시판을 '상담 검색 + 플레이북' 2탭으로, AI 플레이북 생성에 기간·최소건수·생성근거 반영. 배포 가이드를 앱 로그인 방식으로 갱신
-- **주요 변경 파일**:
-  - `dashboard/server/lib/auth.mjs`(신규), `dashboard/src/lib/auth.ts`·`components/Login.tsx`(신규) — 로그인
-  - `dashboard/src/components/` — `BlogChecker.tsx`, `Knowledge.tsx`, `CsSearch.tsx`(신규)
-  - `dashboard/src/lib/` — `blog.ts`, `csSearch.ts`(신규), `playbooks.ts`
-  - `dashboard/server/notion-sales-bff.mjs` — 로그인 게이트·`/api/blog-analyze`·`/api/cs-index*`·`/api/cs-search`·`/api/upload`
-  - `dashboard/src/App.tsx`·`App.css`·`components/Header.tsx`·`components/Playbooks.tsx`
-
-### [v1.0](docs/v1.0.md) (2026-06-26)
-- **추가**: 전체 현황 대시보드 / 일정(구글캘린더 양방향 연동) / 경영지표 점수화·연말 예상 / 거래현황 KICC·CMS
-- **개선**: 경영지표를 작년 **동월** 대비 평가 + **연말 예상**(작년 계절성) + **작년=100점 성과 점수·원포인트** 분석으로 고도화
-- **편의**: `실행.bat`(윈도우 원클릭 실행), 다른 PC 실행·구글캘린더 설정 가이드 추가
-- **주요 변경 파일**:
-  - `dashboard/src/components/` — `Overview.tsx`, `Schedule.tsx`, `ManagementMetrics.tsx`, `TrMetrics.tsx`
-  - `dashboard/src/lib/` — `overview.ts`, `schedule.ts`
-  - `dashboard/server/notion-sales-bff.mjs` — `/api/schedule`(구글캘린더 CRUD), node-ical 의존성
-  - `dashboard/src/App.tsx`, `dashboard/src/App.css`
-
-### [v0.1](docs/v0.1.md)
-- 최초 프로토타입 — 경영지표(노션 매출), 거래(TR) 현황, 무실적 가맹점, CS 현황, 꿀팁게시판
+_이전 버전(**v1.44 이하**)의 상세 내역은 위 **[버전별 상세 문서]** 링크(`docs/vX.XX.md`)에서 확인하세요._
 
 ---
 
