@@ -2057,6 +2057,83 @@ app.get("/api/tasks", async (_req, res) => {
   }
 });
 
+// ===== 업무현황 AI 요약 (Claude가 현재 업무 데이터를 읽고 한눈 요약) =====
+// tasks 내용이 바뀌면(상태/정체) 재생성, 아니면 30분 캐시. ?force=1 로 강제.
+let taskSummaryCache = { at: 0, sig: "", data: null };
+app.get("/api/tasks/summary", async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!tasksCache.data || now - tasksCache.at > TTL_MS) {
+      tasksCache = { at: now, data: await loadTasks() };
+    }
+    const tasks = tasksCache.data;
+    const active = tasks.filter((t) => t.status !== "처리완료");
+    const staleList = active.filter((t) => t.stale).map((t) => `${t.name}(${t.assignee})`);
+    const sig = tasks.map((t) => `${t.id}:${t.status}:${t.stale ? 1 : 0}`).join("|");
+    const force = req.query.force === "1";
+
+    if (!force && taskSummaryCache.data && taskSummaryCache.sig === sig && now - taskSummaryCache.at < 30 * 60 * 1000) {
+      return res.json({ ...taskSummaryCache.data, cached: true, generatedAt: new Date(taskSummaryCache.at).toISOString() });
+    }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.json({ summary: null, error: "ANTHROPIC_API_KEY(.env) 미설정 — AI 요약 비활성", generatedAt: null });
+    }
+
+    // 집계
+    const byStatus = {};
+    for (const t of tasks) byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+    const byPerson = {};
+    for (const t of active) {
+      const n = t.assignee || "미지정";
+      byPerson[n] = byPerson[n] || { active: 0, stale: 0 };
+      byPerson[n].active++;
+      if (t.stale) byPerson[n].stale++;
+    }
+    const personLine = Object.entries(byPerson)
+      .map(([n, v]) => `${n} 진행 ${v.active}${v.stale ? `·정체 ${v.stale}` : ""}`)
+      .join(", ");
+    const lines = active
+      .slice(0, 90)
+      .map(
+        (t) =>
+          `- [${t.status}]${t.stale ? "(정체)" : ""} ${t.name} · 담당 ${t.assignee}` +
+          `${t.priority ? ` · 우선순위 ${t.priority}` : ""}` +
+          `${t.requester && t.requester !== t.assignee ? ` · 요청 ${t.requester}` : ""}` +
+          `${t.category ? ` · ${t.category}` : ""}`
+      )
+      .join("\n");
+
+    const system =
+      "너는 중소기업 팀장을 돕는 업무 비서다. 지금 팀 전체 업무 현황 데이터를 읽고, 팀장이 '한눈에' 상황을 파악하도록 " +
+      "간결한 한국어 요약을 만든다. 데이터에 없는 내용은 지어내지 말고, 과장·미사여구 없이 사실 중심으로 쓴다. " +
+      "숫자는 실제 집계를 활용한다. 반드시 아래 JSON 객체만 출력(코드펜스·설명 금지):\n" +
+      '{"headline":"전체 상황을 담은 한 줄(핵심 수치 포함)","highlights":["지금 주목할 진행/완료 흐름 3~5개, 담당자명 포함"],"attention":["신경 써야 할 정체·보류·과부하 등 2~4개, 담당자명 포함"]}';
+    const user =
+      `상태별 건수: ${Object.entries(byStatus).map(([k, v]) => `${k} ${v}`).join(", ")}\n` +
+      `담당자별(진행 중): ${personLine || "없음"}\n` +
+      `정체 업무(${staleList.length}): ${staleList.join(", ") || "없음"}\n\n` +
+      `활성(미완료) 업무 목록:\n${lines || "없음"}`;
+
+    let txt = await claudeText(system, user, 1500);
+    txt = txt.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const parsed = JSON.parse(txt);
+    const data = {
+      summary: {
+        headline: String(parsed.headline || ""),
+        highlights: Array.isArray(parsed.highlights) ? parsed.highlights.filter(Boolean).map(String) : [],
+        attention: Array.isArray(parsed.attention) ? parsed.attention.filter(Boolean).map(String) : [],
+      },
+      counts: { total: tasks.length, active: active.length, stale: staleList.length },
+    };
+    taskSummaryCache = { at: now, sig, data };
+    res.json({ ...data, cached: false, generatedAt: new Date(now).toISOString() });
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("JSON")) return res.status(502).json({ error: "요약 형식 오류 — 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
 // ===== 업무일지 (매일 18:00 자동 생성 + 수동) =====
 const WORKLOG_HOUR = 19; // 오후 7시
 

@@ -235,37 +235,16 @@ export function WorkLog() {
           </section>
 
           {/* 선택일 리포트 */}
-          <div className="brief-cols" ref={reportRef}>
-            <div className="card card--wide">
-              <h2 className="card__title">✍️ {activeDate} 업무일지 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· 언제든 직접 작성</span></h2>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={5}
-                placeholder={"오늘 한 일·진행 상황·내일 일정 등을 자유롭게 기재하세요."}
-                style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "12px 14px", fontSize: 14, lineHeight: 1.7, fontFamily: "inherit", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)", color: "var(--text)" }}
-              />
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
-                <button className="sync-btn" onClick={handleSaveNote} disabled={saving || !noteDirty}>
-                  {saving ? "저장 중…" : noteDirty ? "💾 저장" : "저장됨"}
-                </button>
-                {!noteDirty && savedAt && <span className="sales__updated">마지막 저장 {new Date(savedAt).toLocaleString("ko-KR")}</span>}
-              </div>
-            </div>
-
-            <CsReportCard date={activeDate} />
-
+          <div className="wl-report" ref={reportRef}>
             {report && (report.summary.total > 0 || report.digest || report.aiComment) && (
               <>
-                {/* 세 줄 요약 */}
+                {/* ── 한눈 요약: 세 줄 + 숫자 (전체폭, 맨 위) ── */}
                 {report.digest?.threeLine && report.digest.threeLine.length > 0 && (
                   <section className="card card--wide brief-three">
                     <div className="brief-cap">세 줄 요약</div>
                     {report.digest.threeLine.map((l, i) => <p key={i}>{l}</p>)}
                   </section>
                 )}
-
-                {/* 숫자 */}
                 <div className="sales__kpis">
                   <Kpi label="오늘 완료" value={report.summary.doneToday} tone="#047857" />
                   <Kpi label="진행 중" value={report.summary.inProgress} tone="#1d4ed8" />
@@ -274,71 +253,97 @@ export function WorkLog() {
                   <Kpi label="정체" value={report.summary.stale} tone={report.summary.stale > 0 ? "#b91c1c" : undefined} />
                 </div>
 
-                {/* 01 하루의 흐름 */}
-                {report.digest?.flow && report.digest.flow.length > 0 && (
-                  <section className="card card--wide">
-                    <div className="brief-sec-h"><span className="no">01</span><h2>하루의 흐름</h2></div>
-                    <ul className="brief-flow">
-                      {report.digest.flow.map((f, i) => <li key={i}>{f}</li>)}
-                    </ul>
-                  </section>
-                )}
+                {/* ── 상세 2열(masonry) ── */}
+                <div className="wl-detail">
+                  {/* 01 하루의 흐름 */}
+                  {report.digest?.flow && report.digest.flow.length > 0 && (
+                    <section className="card card--wide">
+                      <div className="brief-sec-h"><span className="no">01</span><h2>하루의 흐름</h2></div>
+                      <ul className="brief-flow">
+                        {report.digest.flow.map((f, i) => <li key={i}>{f}</li>)}
+                      </ul>
+                    </section>
+                  )}
 
-                {/* 02 오늘의 이야기 */}
-                {report.digest?.stories && report.digest.stories.length > 0 && (
-                  <section className="card card--wide">
-                    <div className="brief-sec-h"><span className="no">02</span><h2>오늘의 이야기</h2></div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {report.digest.stories.map((s, i) => <StoryCard key={i} s={s} />)}
-                    </div>
-                  </section>
-                )}
-
-                {/* AI 코멘트 (브리핑 없을 때 대체) */}
-                {!report.digest && report.aiComment && (
-                  <section className="card card--wide">
-                    <h2 className="card__title">🧠 오늘 요약</h2>
-                    <p style={{ margin: 0, lineHeight: 1.7, whiteSpace: "pre-wrap", color: "var(--text)" }}>{report.aiComment}</p>
-                  </section>
-                )}
-
-                {/* 03 구성원별 하루 */}
-                {report.assignees.length > 0 && (
-                  <section className="card card--wide">
-                    <div className="brief-sec-h"><span className="no">03</span><h2>구성원별 하루</h2></div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                      {report.assignees.map((a) => <AssigneeBlock key={a.name} a={a} />)}
-                    </div>
-                  </section>
-                )}
-
-                {/* 04 지켜볼 것 */}
-                {report.digest?.watch && report.digest.watch.length > 0 && (
-                  <section className="card card--wide">
-                    <div className="brief-sec-h"><span className="no">04</span><h2>지켜볼 것</h2></div>
-                    {report.digest.watch.map((w, i) => (
-                      <div key={i} className="brief-iss">
-                        {w.badge && <span className="brief-iss__badge">{w.badge}</span>}
-                        <div><div className="brief-iss__t">{w.title}</div><div className="brief-iss__m">{w.note}</div></div>
+                  {/* 02 오늘의 이야기 */}
+                  {report.digest?.stories && report.digest.stories.length > 0 && (
+                    <section className="card card--wide">
+                      <div className="brief-sec-h"><span className="no">02</span><h2>오늘의 이야기</h2></div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {report.digest.stories.map((s, i) => <StoryCard key={i} s={s} />)}
                       </div>
-                    ))}
-                  </section>
-                )}
+                    </section>
+                  )}
 
-                {/* 05 내일 */}
-                {report.digest?.tomorrow && report.digest.tomorrow.length > 0 && (
-                  <section className="card card--wide">
-                    <div className="brief-sec-h"><span className="no">05</span><h2>내일</h2></div>
-                    <ul className="brief-tmr">
-                      {report.digest.tomorrow.map((t, i) => <li key={i}>{t}</li>)}
-                    </ul>
-                  </section>
-                )}
+                  {/* AI 코멘트 (브리핑 없을 때 대체) */}
+                  {!report.digest && report.aiComment && (
+                    <section className="card card--wide">
+                      <h2 className="card__title">🧠 오늘 요약</h2>
+                      <p style={{ margin: 0, lineHeight: 1.7, whiteSpace: "pre-wrap", color: "var(--text)" }}>{report.aiComment}</p>
+                    </section>
+                  )}
+
+                  {/* 03 구성원별 하루 (전체폭 + 구성원 그리드로 압축) */}
+                  {report.assignees.length > 0 && (
+                    <section className="card card--wide wl-span">
+                      <div className="brief-sec-h"><span className="no">03</span><h2>구성원별 하루</h2></div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "6px 26px" }}>
+                        {report.assignees.map((a) => <AssigneeBlock key={a.name} a={a} />)}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* 04 지켜볼 것 */}
+                  {report.digest?.watch && report.digest.watch.length > 0 && (
+                    <section className="card card--wide">
+                      <div className="brief-sec-h"><span className="no">04</span><h2>지켜볼 것</h2></div>
+                      {report.digest.watch.map((w, i) => (
+                        <div key={i} className="brief-iss">
+                          {w.badge && <span className="brief-iss__badge">{w.badge}</span>}
+                          <div><div className="brief-iss__t">{w.title}</div><div className="brief-iss__m">{w.note}</div></div>
+                        </div>
+                      ))}
+                    </section>
+                  )}
+
+                  {/* 05 내일 */}
+                  {report.digest?.tomorrow && report.digest.tomorrow.length > 0 && (
+                    <section className="card card--wide">
+                      <div className="brief-sec-h"><span className="no">05</span><h2>내일</h2></div>
+                      <ul className="brief-tmr">
+                        {report.digest.tomorrow.map((t, i) => <li key={i}>{t}</li>)}
+                      </ul>
+                    </section>
+                  )}
+                </div>
               </>
             )}
+
+            {/* ── 직접 작성 + 채널톡 리포트 (아래로) ── */}
+            <div className="wl-detail">
+              <div className="card card--wide">
+                <h2 className="card__title">✍️ {activeDate} 업무일지 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· 언제든 직접 작성</span></h2>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={5}
+                  placeholder={"오늘 한 일·진행 상황·내일 일정 등을 자유롭게 기재하세요."}
+                  style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "12px 14px", fontSize: 14, lineHeight: 1.7, fontFamily: "inherit", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)", color: "var(--text)" }}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
+                  <button className="sync-btn" onClick={handleSaveNote} disabled={saving || !noteDirty}>
+                    {saving ? "저장 중…" : noteDirty ? "💾 저장" : "저장됨"}
+                  </button>
+                  {!noteDirty && savedAt && <span className="sales__updated">마지막 저장 {new Date(savedAt).toLocaleString("ko-KR")}</span>}
+                </div>
+              </div>
+
+              <CsReportCard date={activeDate} />
+            </div>
+
             {missing && !report?.aiComment && !(report && report.summary.total > 0) && (
               <div className="state" style={{ fontSize: 13 }}>
-                이 날짜엔 자동집계 일지가 없습니다. 위에 직접 작성하거나, 오늘이면 "오늘 자동집계 생성"으로 만들 수 있어요.
+                이 날짜엔 자동집계 일지가 없습니다. 위에서 직접 작성하거나, 오늘이면 "오늘 자동집계 생성"으로 만들 수 있어요.
               </div>
             )}
           </div>

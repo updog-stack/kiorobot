@@ -41,6 +41,26 @@ export async function fetchTasks(): Promise<TasksPayload> {
   return (await res.json()) as TasksPayload;
 }
 
+// ===== 업무현황 AI 요약 =====
+export interface TaskSummary {
+  headline: string;
+  highlights: string[];
+  attention: string[];
+}
+export interface TaskSummaryResponse {
+  summary: TaskSummary | null;
+  counts?: { total: number; active: number; stale: number };
+  cached?: boolean;
+  generatedAt: string | null;
+  error?: string;
+}
+export async function fetchTaskSummary(force = false): Promise<TaskSummaryResponse> {
+  const res = await fetch(`/api/tasks/summary${force ? "?force=1" : ""}`);
+  const body = (await res.json()) as TaskSummaryResponse;
+  if (!res.ok) throw new Error((body as { error?: string })?.error || `요약 실패: ${res.status}`);
+  return body;
+}
+
 // "YYYY-MM-DD" (로컬 오늘)
 export function todayIso(): string {
   const d = new Date();

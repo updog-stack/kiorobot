@@ -81,11 +81,15 @@
 @media (max-width: 900px) {
   .wl-grid { grid-template-columns: 1fr; }
 }
-/* 리포트 영역: 넓은 화면(1920 등)에서 2열로 흘려 한 화면에 최대한 담기 */
-.brief-cols { column-count: 2; column-gap: 14px; }
-.brief-cols > * { break-inside: avoid; margin: 0 0 14px; }
-.brief-cols .card { padding: 13px 16px; }
-@media (max-width: 1500px) { .brief-cols { column-count: 1; } }
+/* 리포트 영역: 한눈 요약(전체폭) + 상세 2열 */
+.wl-report { display: flex; flex-direction: column; gap: 14px; }
+.wl-report > .sales__kpis { margin: 0; }
+.wl-report .card { padding: 13px 16px; }
+/* 상세: 명시적 2열 그리드(빈 공간 방지). 큰 카드는 wl-span 으로 전체폭 */
+.wl-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; grid-auto-flow: row dense; }
+.wl-detail > * { margin: 0 !important; }
+.wl-span { grid-column: 1 / -1; }
+@media (max-width: 1200px) { .wl-detail { grid-template-columns: 1fr; } }
 
 /* 인쇄(→PDF 저장): 업무일지 본문만, 캘린더·사이드바·헤더·버튼 숨김 */
 @media print {
@@ -94,8 +98,8 @@
   .content { display: block !important; padding: 0 !important; }
   .sidebar, .header, .seg, .wl-print-hide, .wl-cal-card { display: none !important; }
   .wl-grid { display: block !important; }
-  .brief-cols { column-count: 1 !important; }
-  .brief-cols button, .brief-cols .sync-btn, .brief-cols a.sync-btn { display: none !important; }
+  .wl-detail { column-count: 1 !important; }
+  .wl-report button, .wl-report .sync-btn, .wl-report a.sync-btn { display: none !important; }
   .card { box-shadow: none !important; border-color: #ddd !important; break-inside: avoid; }
   textarea { border: none !important; padding: 0 !important; background: #fff !important; }
   @page { margin: 12mm; }
