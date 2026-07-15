@@ -153,8 +153,28 @@
 /* ===== 업무 관계도 · 현황표 ===== */
 .task-top {
   display: grid;
-  grid-template-columns: 1.5fr 1fr;
+  grid-template-columns: 1fr;
   gap: 14px;
+}
+/* 팀 현황 통합 카드 — 마인드맵 | 연결선 | 업무표 */
+.task-merge { display: flex; gap: 14px; align-items: stretch; }
+.task-merge__mh { font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 2px; }
+.task-merge__diagram { flex: 0 0 clamp(420px, 46%, 640px); min-width: 0; align-self: center; }
+.task-merge__link { flex: 0 0 30px; display: flex; align-items: center; justify-content: center; }
+.task-merge__table { flex: 1 1 0; min-width: 0; }
+.task-merge__table .data-table th, .task-merge__table .data-table td { font-size: 14px; }
+/* 구성원 필터 행 (상태 보드 안) */
+.member-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.member-row .pcard { max-width: none; border-top: none; padding: 10px 13px; border: 1px solid var(--border); border-radius: 10px; }
+@media (max-width: 820px) { .member-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) {
+  .task-merge { flex-wrap: wrap; }
+  .task-merge__link { display: none; }
+  .task-merge__table { flex: 1 1 100%; }
+}
+@media (max-width: 900px) {
+  .task-merge { flex-direction: column; }
+  .task-merge__members, .task-merge__diagram, .task-merge__table { flex-basis: auto; width: 100%; }
 }
 @media (max-width: 900px) {
   .task-top { grid-template-columns: 1fr; }
@@ -186,30 +206,30 @@
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 800; flex-shrink: 0; cursor: pointer;
 }
-.pcard__nm { font-size: 13px; font-weight: 700; }
-.pcard__rl { font-size: 11px; color: var(--muted); }
+.pcard__nm { font-size: 14.5px; font-weight: 700; }
+.pcard__rl { font-size: 12px; color: var(--muted); }
 .pcard__cnts { margin-left: auto; display: flex; gap: 10px; text-align: center; }
 .pcard__cnts > div { min-width: 34px; }
-.pcard__n { font-size: 15px; font-weight: 800; }
-.pcard__l { font-size: 9.5px; color: var(--muted); }
+.pcard__n { font-size: 17px; font-weight: 800; }
+.pcard__l { font-size: 11px; color: var(--muted); }
 .loc-btn {
   border: none; border-radius: 8px; padding: 5px 10px;
-  font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
   font-family: inherit;
 }
 .busy-badge {
-  display: inline-block; font-size: 11px; font-weight: 700;
+  display: inline-block; font-size: 12.5px; font-weight: 700;
   padding: 3px 9px; border-radius: 999px; white-space: nowrap;
 }
 
 .task-chip {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11.5px; color: var(--text);
-  background: #f2f3f6; border-radius: 20px; padding: 2px 9px 2px 3px; margin: 1px 3px 1px 0;
+  font-size: 13px; color: var(--text);
+  background: #f2f3f6; border-radius: 20px; padding: 3px 10px 3px 4px; margin: 1px 3px 1px 0;
 }
 .task-chip__dot {
-  width: 16px; height: 16px; border-radius: 50%; color: #fff;
-  font-size: 9px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%; color: #fff;
+  font-size: 10.5px; font-weight: 800; display: flex; align-items: center; justify-content: center;
 }
 .task-arrow { color: var(--muted); font-size: 11px; margin: 0 3px; }
 
@@ -3317,3 +3337,20 @@
 .amudo-table th:first-child, .amudo-table td:first-child { text-align: left; font-weight: 600; }
 .amudo-table td { text-align: right; font-variant-numeric: tabular-nums; }
 .amudo-table tbody tr:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
+
+/* 팀 관계도 V3 상태 보드(칸반) */
+.task-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding-bottom: 4px; }
+@media (max-width: 820px) { .task-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.task-col { background: color-mix(in srgb, var(--muted) 7%, transparent); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; min-height: 130px; }
+.task-col__h { font-size: 15px; font-weight: 700; padding: 8px 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+.task-col__h b { font-size: 16px; }
+.task-col__body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.task-card2 { background: #fff; border: 1px solid var(--line, #e5e7eb); border-radius: 9px; padding: 10px 12px; cursor: pointer; transition: border-color .12s; }
+.task-card2:hover { border-color: #c9cef0; }
+.task-card2.is-open { border-color: #5b6ad0; box-shadow: 0 0 0 2px color-mix(in srgb, #5b6ad0 18%, transparent); }
+.task-card2__n { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 5px; line-height: 1.35; }
+.task-card2__stale { color: #e5484d; font-size: 10px; margin-right: 4px; vertical-align: middle; }
+.task-card2__meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.task-tag { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid; background: #fff; white-space: nowrap; }
+.task-tag--muted { color: #9aa0a8; border-color: #e2e4ea; }
+.task-col__empty { color: #c2c7d0; text-align: center; font-size: 12px; padding: 12px 0; }

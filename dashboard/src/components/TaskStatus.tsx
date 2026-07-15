@@ -5,6 +5,8 @@ import {
   getStaffLocations,
   setStaffLocation,
   busyLevel,
+  STATUS_ORDER,
+  todayIso,
   type TaskRecord,
   type StaffLocations,
   type WorkLocation,
@@ -13,12 +15,27 @@ import {
 
 const REFRESH_MS = 5 * 60 * 1000;
 const PALETTE = ["#5b6ad0", "#1aa39a", "#d99a3c", "#c96a99", "#4c8fdd", "#8b6fd0", "#d76b6b", "#5fa25a"];
+// 업무분류 색상(미지정은 회보라)
+const CAT_COLORS: Record<string, string> = { 개발업무: "#4c8fdd", 마케팅업무: "#c96a99", CS응대: "#1aa39a", 회계업무: "#d99a3c", 영업업무: "#5fa25a" };
+const catColor = (c: string) => CAT_COLORS[c] ?? "#8b6fd0";
 const STATUS_CLASS: Record<string, { fg: string; bg: string }> = {
   진행중: { fg: "#1d4ed8", bg: "#dbeafe" },
   업무대기: { fg: "#475569", bg: "#e2e8f0" },
   보류중: { fg: "#b45309", bg: "#fef3c7" },
   처리완료: { fg: "#047857", bg: "#d1fae5" },
 };
+// 다인아이앤씨 직원 4명만 구성원으로 표시(나머지는 타부서·거래처이므로 제외). master.md §2 참조
+const TEAM = ["김동만", "민승재", "김소원", "조아름"];
+// ISO(UTC) → 로컬 YYYY-MM-DD (오늘 활동 판단용)
+const localDay = (iso?: string | null) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// 오늘 활동 = 오늘 생성됐거나 오늘 수정된 업무
+const touchedToday = (t: TaskRecord, today: string) =>
+  localDay(t.created) === today || localDay(t.lastEdited) === today;
 const initial = (name: string) => (name[0] === "김" ? name[1] || name[0] : name[0]);
 
 interface Person {
@@ -38,6 +55,9 @@ export function TaskStatusView() {
   const [selected, setSelected] = useState<string[]>([]);
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [catSel, setCatSel] = useState<string[]>([]); // 마인드맵에서 선택한 업무분류(표 필터)
+  const [statusFilter, setStatusFilter] = useState<string | null>(null); // 표 상태 필터
+  const [todayOnly, setTodayOnly] = useState(false); // 상태보드 '오늘만'(오늘 생성·수정)
 
   async function load(silent = false) {
     try {
@@ -57,9 +77,9 @@ export function TaskStatusView() {
 
   // 구성원 집계
   const people: Person[] = useMemo(() => {
-    const list = tasks ?? [];
-    const names = [...new Set(list.map((t) => t.assignee).filter((n) => n && n !== "미지정"))].sort();
-    return names.map((name, i) => {
+    const list = (tasks ?? []).filter((t) => !t.trash);
+    // 구성원 = 다인아이앤씨 직원 4명 고정(TEAM). 타부서·거래처는 담당/협업/요청으로 나와도 제외.
+    return TEAM.map((name, i) => {
       const owned = list.filter((t) => t.assignee === name);
       const activeOwned = owned.filter((t) => t.status !== "처리완료");
       return {
@@ -75,72 +95,66 @@ export function TaskStatusView() {
     });
   }, [tasks]);
 
-  const externals = useMemo(
-    () => [...new Set((tasks ?? []).flatMap((t) => t.ext ?? []))],
-    [tasks]
-  );
-
-  // 관계 엣지 (공유 업무 수를 가중치 w로 누적 — 선 굵기에 반영)
-  const edges = useMemo(() => {
-    const list = tasks ?? [];
-    type E = { a: string; b: string; w: number };
-    const collabM = new Map<string, E>();
-    const reqM = new Map<string, E>();
-    const extM = new Map<string, E>();
-    const bump = (m: Map<string, E>, k: string, a: string, b: string) => {
-      const e = m.get(k) ?? { a, b, w: 0 };
-      e.w++;
-      m.set(k, e);
-    };
+  // V2: 업무분류별 그룹(담당자·부서·건수)
+  const byCategory = useMemo(() => {
+    const list = (tasks ?? []).filter((t) => !t.trash);
+    const m = new Map<string, { category: string; tasks: TaskRecord[]; assignees: Set<string>; depts: Set<string>; active: number }>();
     for (const t of list) {
-      (t.collab ?? []).forEach((c) => {
-        if (c !== t.assignee) bump(collabM, [t.assignee, c].sort().join("|c|"), t.assignee, c);
-      });
-      if (t.requester && t.requester !== t.assignee) bump(reqM, t.requester + ">" + t.assignee, t.requester, t.assignee);
-      (t.ext ?? []).forEach((x) => bump(extM, t.assignee + "|e|" + x, t.assignee, x));
+      const c = t.category || "미분류";
+      const g = m.get(c) ?? { category: c, tasks: [], assignees: new Set(), depts: new Set(), active: 0 };
+      g.tasks.push(t);
+      if (t.assignee && t.assignee !== "미지정") g.assignees.add(t.assignee);
+      (t.depts ?? []).forEach((d) => g.depts.add(d));
+      if (t.status !== "처리완료") g.active++;
+      m.set(c, g);
     }
-    return { collab: [...collabM.values()], req: [...reqM.values()], ext: [...extM.values()] };
+    return [...m.values()]
+      .map((g) => ({ category: g.category, tasks: g.tasks, assignees: [...g.assignees], depts: [...g.depts], active: g.active }))
+      .sort((a, b) => b.tasks.length - a.tasks.length);
   }, [tasks]);
 
-  // SVG 좌표 (중심 허브 → 방사형 마인드맵)
-  const CX = 380, CY = 262;
-  const HUB = { x: CX, y: CY };
-  const pos = useMemo(() => {
-    const p: Record<string, { x: number; y: number }> = {};
-    people.forEach((pn, i) => {
-      const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(people.length, 1);
-      p[pn.name] = { x: CX + Math.cos(a) * 150, y: CY + Math.sin(a) * 150 };
-    });
-    externals.forEach((x, i) => {
-      const a = -Math.PI / 2 + ((i + 0.5) * 2 * Math.PI) / Math.max(externals.length, 1);
-      p[x] = { x: CX + Math.cos(a) * 248, y: CY + Math.sin(a) * 168 };
-    });
-    return p;
-  }, [people, externals]);
+  // V3: 상태별 그룹(칸반)
+  const byStatus = useMemo(() => {
+    const today = todayIso();
+    const list = (tasks ?? []).filter((t) => !t.trash)
+      .filter((t) => selected.length === 0 || selected.includes(t.assignee) || (t.collab ?? []).some((c) => selected.includes(c)) || (t.requester ? selected.includes(t.requester) : false))
+      .filter((t) => catSel.length === 0 || catSel.includes(t.category || "미분류"))
+      .filter((t) => !todayOnly || touchedToday(t, today));
+    return STATUS_ORDER.map((s) => ({ status: s, tasks: list.filter((t) => (t.status || "업무대기") === s) }));
+  }, [tasks, selected, catSel, todayOnly]);
 
-  // 노드 반경(현재 진행 부하로 크기), 곡선 경로(마인드맵 느낌)
-  const nodeR = (name: string) => 16 + (people.find((p) => p.name === name)?.activeOwned ?? 0) * 1.5;
-  const curve = (a: { x: number; y: number }, b: { x: number; y: number }) => {
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    return `M${a.x},${a.y} Q${mx - dy * 0.14},${my + dx * 0.14} ${b.x},${b.y}`;
+  // '오늘만' 토글 버튼에 표시할 오늘 활동 건수(선택·분류 필터 무시, 전체 기준)
+  const todayCount = useMemo(() => {
+    const today = todayIso();
+    return (tasks ?? []).filter((t) => !t.trash && touchedToday(t, today)).length;
+  }, [tasks]);
+
+  // 마인드맵 가지 — 허브(넓게 w1)→노드(좁게 w2)로 가늘어지는 유기적 곡선(채워진 path)
+  const branch = (a: { x: number; y: number }, b: { x: number; y: number }, w1: number, w2: number) => {
+    const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+    const px = -dy / L, py = dx / L;                          // 수직 단위벡터
+    const cx = (a.x + b.x) / 2 + px * L * 0.13, cy = (a.y + b.y) / 2 + py * L * 0.13; // 제어점(자연스런 휨)
+    const wm = (w1 + w2) / 2;
+    const A1 = [a.x + px * w1 / 2, a.y + py * w1 / 2], A2 = [a.x - px * w1 / 2, a.y - py * w1 / 2];
+    const B1 = [b.x + px * w2 / 2, b.y + py * w2 / 2], B2 = [b.x - px * w2 / 2, b.y - py * w2 / 2];
+    const C1 = [cx + px * wm / 2, cy + py * wm / 2], C2 = [cx - px * wm / 2, cy - py * wm / 2];
+    return `M${A1[0]},${A1[1]} Q${C1[0]},${C1[1]} ${B1[0]},${B1[1]} L${B2[0]},${B2[1]} Q${C2[0]},${C2[1]} ${A2[0]},${A2[1]} Z`;
   };
 
   // 복수 선택: selected는 이름 배열. 비어있으면 전체 표시.
   const isSel = (n: string) => selected.includes(n);
-  const connected = (name: string) =>
-    selected.length === 0 ||
-    isSel(name) ||
-    [...edges.collab, ...edges.req, ...edges.ext].some(
-      (e) => (e.a === name && isSel(e.b)) || (e.b === name && isSel(e.a))
-    );
-  const edgeVis = (e: { a: string; b: string }) => selected.length === 0 || isSel(e.a) || isSel(e.b);
   // 클릭하면 토글(추가/해제) — 여러 명 동시 선택 가능
   const toggle = (n: string) => {
     setSelected((s) => (s.includes(n) ? s.filter((x) => x !== n) : [...s, n]));
     setOpenTask(null);
   };
-  const clearSel = () => { setSelected([]); setOpenTask(null); };
+  const isCatSel = (c: string) => catSel.includes(c);
+  const toggleCat = (c: string) => {
+    setCatSel((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
+    setOpenTask(null);
+  };
+  const clearSel = () => { setSelected([]); setCatSel([]); setStatusFilter(null); setOpenTask(null); };
+  const anyFilter = selected.length > 0 || catSel.length > 0 || !!statusFilter;
 
   async function toggleLoc(name: string) {
     const next: WorkLocation = (loc[name] ?? "내근") === "내근" ? "외근" : "내근";
@@ -167,250 +181,251 @@ export function TaskStatusView() {
     );
   };
 
-  // 선택된 사람(복수)의 업무만 필터 — 담당/협업/요청 어느 쪽이든 걸리면 표시
-  const shownTasks =
-    selected.length === 0
-      ? tasks
-      : tasks.filter(
-          (t) => isSel(t.assignee) || (t.collab ?? []).some(isSel) || (t.requester ? isSel(t.requester) : false)
-        );
+  // 표 필터 — 사람(담당/협업/요청) + 업무분류(마인드맵 선택) + 상태
+  const shownTasks = tasks.filter((t) => {
+    if (selected.length > 0 && !(isSel(t.assignee) || (t.collab ?? []).some(isSel) || (t.requester ? isSel(t.requester) : false))) return false;
+    if (catSel.length > 0 && !catSel.includes(t.category || "미분류")) return false;
+    if (statusFilter && (t.status || "업무대기") !== statusFilter) return false;
+    return true;
+  });
 
   return (
     <div className="sales" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* ===== AI 한눈 요약 ===== */}
-      <TaskAiSummary />
+      <TaskAiSummary tasks={tasks} todayOnly={todayOnly} onToggleToday={() => setTodayOnly((v) => !v)} todayCount={todayCount} />
 
       {/* ===== 관계도 + 구성원 ===== */}
       <div className="task-top">
         {/* 관계도 */}
         <section className="card">
-          <h2 className="card__title">팀 관계도 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· 사람을 클릭(여러 명 가능)하면 아래 표가 그 사람들 업무만</span></h2>
-          <svg viewBox="0 0 760 548" style={{ width: "100%", height: 468, display: "block" }}>
-            <defs>
-              <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0,0 L8,4 L0,8 z" fill="#c99" />
-              </marker>
-              {/* 아주 은은한 그림자(가벼운 리프트) */}
-              <filter id="nsh" x="-40%" y="-40%" width="180%" height="180%">
-                <feDropShadow dx="0" dy="1" stdDeviation="2.4" floodColor="#0b1020" floodOpacity={0.16} />
-              </filter>
-            </defs>
+          <h2 className="card__title">팀 현황 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· 담당자·업무분류를 클릭하면 아래 업무표가 필터됩니다</span></h2>
 
-            {/* 허브 스포크 (얇고 담백하게) */}
-            {people.map((pn) =>
-              pos[pn.name] ? (
-                <line key={"hub" + pn.name} x1={HUB.x} y1={HUB.y} x2={pos[pn.name].x} y2={pos[pn.name].y}
-                  stroke="#e6e8f2" strokeWidth={1} opacity={connected(pn.name) ? 1 : 0.25} />
-              ) : null
-            )}
+          <div className="task-merge">
+            {/* 마인드맵 (좌) */}
+            <div className="task-merge__diagram">
 
-            {/* ext edges */}
-            {edges.ext.map((e, i) =>
-              pos[e.a] && pos[e.b] ? (
-                <line key={"x" + i} x1={pos[e.a].x} y1={pos[e.a].y} x2={pos[e.b].x} y2={pos[e.b].y}
-                  stroke="#e2e4ea" strokeWidth={1 + Math.min(e.w, 4) * 0.4} opacity={edgeVis(e) ? 1 : 0.15} />
-              ) : null
-            )}
-            {/* collab edges (곡선 · 공유 업무수만큼 굵게) */}
-            {edges.collab.map((e, i) =>
-              pos[e.a] && pos[e.b] ? (
-                <path key={"c" + i} d={curve(pos[e.a], pos[e.b])} fill="none" stroke="#b7bde8"
-                  strokeWidth={1.4 + Math.min(e.w, 5) * 0.8} strokeLinecap="round" opacity={edgeVis(e) ? 0.9 : 0.12} />
-              ) : null
-            )}
-            {/* requester edges (화살표 · 담백한 점선) */}
-            {edges.req.map((e, i) => {
-              if (!pos[e.a] || !pos[e.b]) return null;
-              const dx = pos[e.b].x - pos[e.a].x, dy = pos[e.b].y - pos[e.a].y, L = Math.hypot(dx, dy) || 1;
-              const rB = nodeR(e.b);
-              return (
-                <line key={"r" + i} x1={pos[e.a].x + (dx * (nodeR(e.a) + 6)) / L} y1={pos[e.a].y + (dy * (nodeR(e.a) + 6)) / L}
-                  x2={pos[e.a].x + dx * (1 - (rB + 9) / L)} y2={pos[e.a].y + dy * (1 - (rB + 9) / L)}
-                  stroke="#d6a6a3" strokeWidth={1.4 + Math.min(e.w, 4) * 0.5} strokeDasharray="4 4" markerEnd="url(#arr)"
-                  opacity={edgeVis(e) ? 0.95 : 0.12} />
-              );
-            })}
+          {/* ===== 업무분류·부서 중심 마인드맵 (항상 표시) ===== */}
+          {(() => {
+            const CX2 = 380, CY2 = 232, HUB2 = { x: CX2, y: CY2 };
+            const cats = byCategory;
+            const cpos = cats.map((_, i) => {
+              const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(cats.length, 1);
+              return { x: CX2 + Math.cos(a) * 172, y: CY2 + Math.sin(a) * 138 };
+            });
+            return (
+              <>
+                <svg viewBox="120 37 520 420" style={{ width: "100%", height: "auto", display: "block" }}>
+                  <defs>
+                    <filter id="nsh2" x="-40%" y="-40%" width="180%" height="180%"><feDropShadow dx="0" dy="1" stdDeviation="2.4" floodColor="#0b1020" floodOpacity={0.16} /></filter>
+                  </defs>
+                  {cats.map((g, i) => <path key={"cb" + i} d={branch(HUB2, cpos[i], 15, 4)} fill={catColor(g.category)} opacity={0.82} filter="url(#nsh2)" />)}
+                  <g>
+                    <circle cx={HUB2.x} cy={HUB2.y} r={32} fill="#eef1ff" stroke="#c9cef0" strokeWidth={2} filter="url(#nsh2)" />
+                    <text x={HUB2.x} y={HUB2.y - 1} textAnchor="middle" fontSize={14} fontWeight={700} fill="#4f46e5">업무 분류</text>
+                    <text x={HUB2.x} y={HUB2.y + 14} textAnchor="middle" fontSize={11} fill="#98a0c0">{cats.length}종 · {(tasks ?? []).filter((t) => !t.trash).length}건</text>
+                  </g>
+                  {cats.map((g, i) => {
+                    const P = cpos[i], c = catColor(g.category), W = 148, H = 46;
+                    return (
+                      <g key={"cn" + i} opacity={catSel.length === 0 || isCatSel(g.category) ? 1 : 0.42}>
+                        <rect x={P.x - W / 2} y={P.y - H / 2} width={W} height={H} rx={13} fill={isCatSel(g.category) ? c : "#fff"} stroke={c} strokeWidth={isCatSel(g.category) ? 3 : 2.2} filter="url(#nsh2)"
+                          onClick={() => toggleCat(g.category)} style={{ cursor: "pointer" }} />
+                        <text x={P.x} y={P.y - 2} textAnchor="middle" fontSize={14} fontWeight={700} fill={isCatSel(g.category) ? "#fff" : c} style={{ pointerEvents: "none" }}>{g.category}</text>
+                        <text x={P.x} y={P.y + 14} textAnchor="middle" fontSize={11.5} fill={isCatSel(g.category) ? "rgba(255,255,255,0.88)" : "#8a92a0"} style={{ pointerEvents: "none" }}>총 {g.tasks.length} · 진행 {g.active}</text>
+                        {g.depts.length > 0 && <text x={P.x} y={P.y + H / 2 + 16} textAnchor="middle" fontSize={10.5} fill="#a0a6b0">{g.depts.slice(0, 3).join(" · ")}</text>}
+                      </g>
+                    );
+                  })}
+                </svg>
+                <div className="task-legend"><span>분류 박스·담당자 점 클릭 → 아래 업무표 필터 · 박스 아래 회색 = 연관부서</span></div>
+              </>
+            );
+          })()}
+            </div>
 
-            {/* external nodes */}
-            {externals.map((x) =>
-              pos[x] ? (
-                <g key={x} opacity={selected.length === 0 || edges.ext.some((e) => (e.a === x || e.b === x) && (isSel(e.a) || isSel(e.b))) ? 1 : 0.15}>
-                  <circle cx={pos[x].x} cy={pos[x].y} r={9} fill="#fff" stroke="#d1d5db" strokeWidth={1.5} />
-                  <text x={pos[x].x} y={pos[x].y + 3.5} textAnchor="middle" fontSize={9} fill="#aab0b8">외</text>
-                  <text x={pos[x].x} y={pos[x].y + 23} textAnchor="middle" fontSize={10.5} fontWeight={500} fill="#9aa0a8">{x}</text>
-                </g>
-              ) : null
-            )}
+            {/* 연결선 (마인드맵 → 업무표) */}
+            <div className="task-merge__link" aria-hidden>
+              <svg width="34" height="40" viewBox="0 0 34 40" preserveAspectRatio="none">
+                <path d="M0,20 C14,20 20,20 34,20" stroke="#b7bde8" strokeWidth="3" fill="none" strokeLinecap="round" />
+                <circle cx="2" cy="20" r="3.2" fill="#b7bde8" />
+                <circle cx="32" cy="20" r="3.2" fill="#b7bde8" />
+              </svg>
+            </div>
 
-            {/* 중심 허브 (플랫·미니멀) */}
-            <g>
-              <circle cx={HUB.x} cy={HUB.y} r={31} fill="#f5f6fb" stroke="#e2e4f0" strokeWidth={1.5} filter="url(#nsh)" />
-              <text x={HUB.x} y={HUB.y - 1} textAnchor="middle" fontSize={13} fontWeight={700} fill="#4f46e5">우리 팀</text>
-              <text x={HUB.x} y={HUB.y + 13} textAnchor="middle" fontSize={9.5} fill="#98a0c0">{people.length}명 · {tasks.length}건</text>
-            </g>
-
-            {/* people nodes */}
-            {people.map((pn) => {
-              if (!pos[pn.name]) return null;
-              const P = pos[pn.name];
-              const r = nodeR(pn.name);
-              const on = connected(pn.name);
-              const bl = busyLevel(pn.activeOwned, pn.stale);
-              const warn = bl.label === "업무과부하" ? "#d76b6b" : bl.label === "바쁨" ? "#d99a3c" : null;
-              return (
-                <g key={pn.name} style={{ cursor: "pointer" }} opacity={on ? 1 : 0.24} onClick={() => toggle(pn.name)}>
-                  {isSel(pn.name) && (
-                    <circle cx={P.x} cy={P.y} r={r + 7} fill="none" stroke={pn.color} strokeWidth={1.5} strokeDasharray="3 3" />
-                  )}
-                  {/* 바쁨/과부하일 때만 은은한 경고 링 */}
-                  {warn && <circle cx={P.x} cy={P.y} r={r + 3} fill="none" stroke={warn} strokeWidth={2} opacity={0.9} />}
-                  {/* 본체 (플랫 + 흰 테두리로 선과 분리 + 은은한 그림자) */}
-                  <circle cx={P.x} cy={P.y} r={r} fill={pn.color} stroke="#fff" strokeWidth={2.5} filter="url(#nsh)" />
-                  <text x={P.x} y={P.y + 4.5} textAnchor="middle" fontSize={13} fontWeight={700} fill="#fff">{initial(pn.name)}</text>
-                  {/* 정체 배지 */}
-                  {pn.stale > 0 && (
-                    <>
-                      <circle cx={P.x + r - 1} cy={P.y - r + 1} r={8} fill="#e5484d" stroke="#fff" strokeWidth={1.5} />
-                      <text x={P.x + r - 1} y={P.y - r + 4} textAnchor="middle" fontSize={9} fontWeight={700} fill="#fff">{pn.stale}</text>
-                    </>
-                  )}
-                  <text x={P.x} y={P.y + r + 16} textAnchor="middle" fontSize={11.5} fontWeight={600} fill="#374151">{pn.name}</text>
-                  <text x={P.x} y={P.y + r + 29} textAnchor="middle" fontSize={9.5} fill="#9ca3af">
-                    {(pn.role ? pn.role + " · " : "") + "진행 " + pn.activeOwned}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-          <div className="task-legend">
-            <span><i style={{ borderTopColor: "#b7bde8", borderTopWidth: 3 }} />협업 (굵을수록 함께 한 업무 많음)</span>
-            <span><i style={{ borderTopStyle: "dashed", borderTopColor: "#d6a6a3" }} />요청 → 담당</span>
-            <span><i className="nd" />외부 (카드사·효성 등)</span>
-            <span><span style={{ color: "#e5484d", fontWeight: 700 }}>●</span> 정체 수 · <span style={{ color: "#d99a3c", fontWeight: 700 }}>◯</span> 바쁨/과부하</span>
-          </div>
-        </section>
-
-        {/* 구성원별 현황 */}
-        <section className="card">
-          <h2 className="card__title">구성원별 현황 <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>담당 / 협업 / 요청 · 근무 · 부하</span></h2>
-          <div>
-            {people.map((p) => {
-              const bl = busyLevel(p.activeOwned, p.stale);
-              const here = (loc[p.name] ?? "내근") === "내근";
-              const sel = isSel(p.name);
-              return (
-                <div key={p.name} className={"pcard" + (sel ? " pcard--sel" : "")}>
-                  <span className="pcard__av" style={{ background: p.color }} onClick={() => toggle(p.name)}>{initial(p.name)}</span>
-                  <div onClick={() => toggle(p.name)} style={{ cursor: "pointer", minWidth: 0 }}>
-                    <div className="pcard__nm">{p.name}</div>
-                    <div className="pcard__rl">{p.role}</div>
-                  </div>
-                  <div className="pcard__cnts">
-                    <div><div className="pcard__n">{p.owned}</div><div className="pcard__l">담당</div></div>
-                    <div><div className="pcard__n">{p.collab}</div><div className="pcard__l">협업</div></div>
-                    <div><div className="pcard__n">{p.requested}</div><div className="pcard__l">요청</div></div>
-                  </div>
-                  {/* 근무(내근/외근) — 클릭해서 변경 */}
-                  <button
-                    className="loc-btn"
-                    onClick={() => toggleLoc(p.name)}
-                    title="클릭하면 내근↔외근 변경"
-                    style={{ color: here ? "#0369a1" : "#c2410c", background: here ? "#e0f2fe" : "#ffedd5" }}
-                  >
-                    {here ? "🏢 내근" : "🚗 외근"}
-                  </button>
-                  {/* 업무 부하(자동) */}
-                  <span className="busy-badge" style={{ color: bl.color, background: bl.bg }} title="진행 중 담당 업무량 기준 자동 판단">
-                    {bl.label}
-                  </span>
+            {/* 업무현황표 (오른쪽) */}
+            <div className="task-merge__table">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                <h2 className="card__title" style={{ margin: 0 }}>업무현황표</h2>
+                <div className="seg" style={{ marginLeft: 4 }}>
+                  <button className={!statusFilter ? "is-active" : ""} onClick={() => setStatusFilter(null)}>전체</button>
+                  {STATUS_ORDER.map((s) => (
+                    <button key={s} className={statusFilter === s ? "is-active" : ""} onClick={() => setStatusFilter(statusFilter === s ? null : s)}>{s}</button>
+                  ))}
                 </div>
-              );
-            })}
+                <span className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
+                  {[selected.length ? selected.join(", ") : "", catSel.length ? catSel.join(", ") : "", statusFilter ?? ""].filter(Boolean).join(" · ")}
+                  {anyFilter ? ` → ${shownTasks.length}건` : `전체 ${tasks.length}건 · 담당자/업무분류 클릭하면 필터`}
+                </span>
+                {anyFilter && <button className="sync-btn" style={{ padding: "4px 10px", fontSize: 12 }} onClick={clearSel}>필터 해제</button>}
+              </div>
+              <div style={{ overflowX: "auto", maxHeight: 470, overflowY: "auto" }}>
+                <table className="data-table" style={{ minWidth: 520 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: "42%" }}>업무</th>
+                      <th style={{ width: "42%" }}>요청 → 담당 · 협업</th>
+                      <th>상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shownTasks.length === 0 && (
+                      <tr><td colSpan={3} className="muted" style={{ textAlign: "center", padding: 18 }}>조건에 맞는 업무가 없습니다.</td></tr>
+                    )}
+                    {shownTasks.map((t) => {
+                      const st = STATUS_CLASS[t.status] ?? { fg: "#475569", bg: "#e2e8f0" };
+                      const open = openTask === t.id;
+                      return (
+                        <Fragment key={t.id}>
+                          <tr style={{ cursor: "pointer", background: open ? "#f7f8fd" : undefined }} onClick={() => setOpenTask(open ? null : t.id)}>
+                            <td style={{ fontWeight: 600 }}>
+                              {t.name}
+                              {t.stale && <span className="busy-badge" style={{ color: "#b91c1c", background: "#fee2e2", marginLeft: 6 }}>정체</span>}
+                              <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>{open ? "▲" : "▼"}</span>
+                            </td>
+                            <td>
+                              {t.requester && t.requester !== t.assignee && (<>{chip(t.requester)}<span className="task-arrow">→</span></>)}
+                              {chip(t.assignee)}
+                              {(t.collab ?? []).map((c) => chip(c))}
+                              {(t.ext ?? []).map((x) => chip(x))}
+                            </td>
+                            <td><span className="busy-badge" style={{ color: st.fg, background: st.bg }}>{t.status}</span></td>
+                          </tr>
+                          {open && (
+                            <tr>
+                              <td colSpan={3} style={{ background: "#f7f8fd", fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                                <b>업무내용</b> · {t.category || "분류 없음"}
+                                {t.taskDate ? ` · 업무일 ${t.taskDate}` : ""}
+                                {"\n"}
+                                {t.content?.trim() || "(작성된 업무내용이 없습니다)"}
+                                {t.url && (<>{"\n"}<a href={t.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>노션에서 열기 ↗</a></>)}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          {selected.length > 0 && (
-            <button className="sync-btn" style={{ marginTop: 10 }} onClick={clearSel}>
-              선택 해제 ({selected.length}명)
-            </button>
-          )}
         </section>
       </div>
 
-      {/* ===== 업무현황표 ===== */}
+      {/* ===== 상태 보드 (팀 현황 아래 별도) ===== */}
       <section className="card card--wide">
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-          <h2 className="card__title" style={{ margin: 0 }}>업무현황표</h2>
-          <span className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
-            {selected.length > 0
-              ? `${selected.join(", ")} 관련 ${shownTasks.length}건 · 이름 다시 누르면 해제`
-              : `전체 ${tasks.length}건 · 마인드맵/이름 클릭(여러 명 가능)하면 그 사람 업무만`}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          <h2 className="card__title" style={{ margin: 0 }}>구성원 · 상태 보드 <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· 이름 클릭하면 그 사람 업무만(기본 전체) · 대기→진행→보류→완료</span></h2>
+          <button
+            onClick={() => setTodayOnly((v) => !v)}
+            style={{
+              cursor: "pointer", fontSize: 13, fontWeight: 700,
+              padding: "6px 12px", borderRadius: 999, whiteSpace: "nowrap",
+              border: todayOnly ? "1px solid #4338ca" : "1px solid var(--border)",
+              background: todayOnly ? "#4338ca" : "#fff",
+              color: todayOnly ? "#fff" : "#475569",
+            }}
+            title="오늘 생성됐거나 오늘 수정된 업무만 보기"
+          >
+            📅 오늘만 {todayCount > 0 && `(${todayCount})`}
+          </button>
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ minWidth: 720 }}>
-            <thead>
-              <tr>
-                <th style={{ width: "32%" }}>업무</th>
-                <th style={{ width: "34%" }}>요청 → 담당 · 협업</th>
-                <th>상태</th>
-                <th>우선순위</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shownTasks.length === 0 && (
-                <tr><td colSpan={4} className="muted" style={{ textAlign: "center", padding: 18 }}>선택한 사람의 업무가 없습니다.</td></tr>
-              )}
-              {shownTasks.map((t) => {
-                const st = STATUS_CLASS[t.status] ?? { fg: "#475569", bg: "#e2e8f0" };
-                const open = openTask === t.id;
-                return (
-                  <Fragment key={t.id}>
-                    <tr
-                      style={{ cursor: "pointer", background: open ? "#f7f8fd" : undefined }}
-                      onClick={() => setOpenTask(open ? null : t.id)}
-                    >
-                      <td style={{ fontWeight: 600 }}>
-                        {t.name}
-                        {t.stale && <span className="busy-badge" style={{ color: "#b91c1c", background: "#fee2e2", marginLeft: 6 }}>정체</span>}
-                        <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>{open ? "▲" : "▼"}</span>
-                      </td>
-                      <td>
-                        {t.requester && t.requester !== t.assignee && (<>{chip(t.requester)}<span className="task-arrow">→</span></>)}
-                        {chip(t.assignee)}
-                        {(t.collab ?? []).map((c) => chip(c))}
-                        {(t.ext ?? []).map((x) => chip(x))}
-                      </td>
-                      <td><span className="busy-badge" style={{ color: st.fg, background: st.bg }}>{t.status}</span></td>
-                      <td className="muted" style={{ fontSize: 12 }}>{t.priority || "—"}</td>
-                    </tr>
-                    {open && (
-                      <tr>
-                        <td colSpan={4} style={{ background: "#f7f8fd", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                          <b>업무내용</b> · {t.category || "분류 없음"}
-                          {t.taskDate ? ` · 업무일 ${t.taskDate}` : ""}
-                          {"\n"}
-                          {t.content?.trim() || "(작성된 업무내용이 없습니다)"}
-                          {t.url && (
-                            <>{"\n"}<a href={t.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>노션에서 열기 ↗</a></>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+
+        {/* 구성원별 현황 (필터) — 이름 클릭하면 보드·표가 그 사람 업무만 */}
+        <div className="member-row">
+          {people.map((p) => {
+            const bl = busyLevel(p.activeOwned, p.stale);
+            const here = (loc[p.name] ?? "내근") === "내근";
+            const sel = isSel(p.name);
+            return (
+              <div key={p.name} className={"pcard" + (sel ? " pcard--sel" : "")}>
+                <span className="pcard__av" style={{ background: p.color }} onClick={() => toggle(p.name)}>{initial(p.name)}</span>
+                <div onClick={() => toggle(p.name)} style={{ cursor: "pointer", minWidth: 0 }}>
+                  <div className="pcard__nm">{p.name}</div>
+                  <div className="pcard__rl">{p.role}</div>
+                </div>
+                <div className="pcard__cnts">
+                  <div><div className="pcard__n">{p.owned}</div><div className="pcard__l">담당</div></div>
+                  <div><div className="pcard__n">{p.collab}</div><div className="pcard__l">협업</div></div>
+                  <div><div className="pcard__n">{p.requested}</div><div className="pcard__l">요청</div></div>
+                </div>
+                <button className="loc-btn" onClick={() => toggleLoc(p.name)} title="클릭하면 내근↔외근 변경"
+                  style={{ color: here ? "#0369a1" : "#c2410c", background: here ? "#e0f2fe" : "#ffedd5" }}>
+                  {here ? "🏢 내근" : "🚗 외근"}
+                </button>
+                <span className="busy-badge" style={{ color: bl.color, background: bl.bg }} title="진행 중 담당 업무량 기준 자동 판단">{bl.label}</span>
+              </div>
+            );
+          })}
+          {selected.length > 0 && (
+            <button className="sync-btn" style={{ alignSelf: "center" }} onClick={() => { setSelected([]); setOpenTask(null); }}>전체 보기</button>
+          )}
+        </div>
+
+        <div className="task-board">
+          {byStatus.map(({ status, tasks: ts }) => {
+            const sc = STATUS_CLASS[status] ?? { fg: "#475569", bg: "#e2e8f0" };
+            return (
+              <div key={status} className="task-col">
+                <div className="task-col__h" style={{ color: sc.fg, background: sc.bg }}>{status}<b>{ts.length}</b></div>
+                <div className="task-col__body">
+                  {ts.map((t) => (
+                    <div key={t.id} className={`task-card2${openTask === t.id ? " is-open" : ""}`} onClick={() => setOpenTask(openTask === t.id ? null : t.id)}>
+                      <div className="task-card2__n">{t.stale && t.status !== "처리완료" && <span className="task-card2__stale" title="정체">●</span>}{t.name}</div>
+                      <div className="task-card2__meta">
+                        {t.assignee && t.assignee !== "미지정" && (
+                          <span className="task-chip" onClick={(e) => { e.stopPropagation(); toggle(t.assignee); }} style={{ cursor: "pointer" }}>
+                            <span className="task-chip__dot" style={{ background: colorOf(t.assignee) ?? "#b6bcc6" }}>{initial(t.assignee)}</span>{t.assignee}
+                          </span>
+                        )}
+                        {t.category && <span className="task-tag" style={{ color: catColor(t.category), borderColor: catColor(t.category) }}>{t.category}</span>}
+                        {(t.depts ?? []).map((d) => <span key={d} className="task-tag task-tag--muted">{d}</span>)}
+                      </div>
+                    </div>
+                  ))}
+                  {ts.length === 0 && <div className="task-col__empty">—</div>}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
+
     </div>
   );
 }
 
 // 업무현황 맨 위 — Claude가 현재 업무 데이터를 읽고 만든 '한눈에' 요약
-function TaskAiSummary() {
+function TaskAiSummary({ tasks, todayOnly, onToggleToday, todayCount }: {
+  tasks: TaskRecord[] | null;
+  todayOnly: boolean;
+  onToggleToday: () => void;
+  todayCount: number;
+}) {
   const [data, setData] = useState<TaskSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+
+  // 상태별 건수(색상 타일) — AI 요약과 무관하게 즉시 표시. '오늘만'이면 오늘 활동분만 집계
+  const statusCounts = useMemo(() => {
+    const today = todayIso();
+    const list = (tasks ?? []).filter((t) => !t.trash).filter((t) => !todayOnly || touchedToday(t, today));
+    return STATUS_ORDER.map((st) => ({
+      status: st,
+      n: list.filter((t) => (t.status || "업무대기") === st).length,
+    }));
+  }, [tasks, todayOnly]);
+  const totalCnt = statusCounts.reduce((a, b) => a + b.n, 0);
 
   async function load(force = false) {
     setLoading(true);
@@ -441,13 +456,40 @@ function TaskAiSummary() {
         <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>Claude가 현재 업무 DB를 읽고 정리</span>
         <button
           className="sync-btn"
-          style={{ marginLeft: "auto" }}
           onClick={() => load(true)}
           disabled={loading}
         >
           {loading ? "요약 중…" : "🔄 다시 요약"}
         </button>
+        <button
+          onClick={onToggleToday}
+          style={{
+            cursor: "pointer", fontSize: 13, fontWeight: 700,
+            padding: "6px 12px", borderRadius: 999, whiteSpace: "nowrap",
+            border: todayOnly ? "1px solid #4338ca" : "1px solid var(--border)",
+            background: todayOnly ? "#4338ca" : "#fff",
+            color: todayOnly ? "#fff" : "#475569",
+          }}
+          title="오늘 생성됐거나 오늘 수정된 업무만 보기"
+        >
+          📅 오늘만 {todayCount > 0 && `(${todayCount})`}
+        </button>
       </div>
+
+      {/* 상태별 건수 — 한눈에 들어오는 색상 타일 */}
+      {totalCnt > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10, margin: "4px 0 14px" }}>
+          {statusCounts.map(({ status, n }) => {
+            const c = STATUS_CLASS[status] ?? { fg: "#475569", bg: "#e2e8f0" };
+            return (
+              <div key={status} style={{ background: c.bg, borderRadius: 12, padding: "12px 8px", textAlign: "center" }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: c.fg, lineHeight: 1.05 }}>{n}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.fg, marginTop: 3 }}>{status}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {loading && !s && <div className="state" style={{ background: "transparent" }}>업무 데이터를 읽는 중…</div>}
       {err && <div className="state state--error">{err}</div>}
@@ -457,23 +499,23 @@ function TaskAiSummary() {
 
       {s && (
         <>
-          <p style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.6, margin: "2px 0 12px", color: "#1e1b4b" }}>
+          <p style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.55, margin: "0 0 12px", color: "#4338ca" }}>
             {s.headline}
           </p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
             {s.highlights.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#3730a3", marginBottom: 6 }}>📌 지금 주목</div>
-                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
-                  {s.highlights.map((h, i) => <li key={i} style={{ fontSize: 13.5, lineHeight: 1.55 }}>{h}</li>)}
+              <div style={{ background: "#fff", borderRadius: 12, padding: "12px 14px", borderLeft: "4px solid #6366f1" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#3730a3", marginBottom: 8 }}>📌 지금 주목</div>
+                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }}>
+                  {s.highlights.map((h, i) => <li key={i} style={{ fontSize: 13.5, lineHeight: 1.5 }}>{h}</li>)}
                 </ul>
               </div>
             )}
             {s.attention.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c", marginBottom: 6 }}>⚠️ 신경 쓸 것</div>
-                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
-                  {s.attention.map((a, i) => <li key={i} style={{ fontSize: 13.5, lineHeight: 1.55 }}>{a}</li>)}
+              <div style={{ background: "#fff", borderRadius: 12, padding: "12px 14px", borderLeft: "4px solid #ef4444" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#b91c1c", marginBottom: 8 }}>⚠️ 신경 쓸 것</div>
+                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }}>
+                  {s.attention.map((a, i) => <li key={i} style={{ fontSize: 13.5, lineHeight: 1.5 }}>{a}</li>)}
                 </ul>
               </div>
             )}
