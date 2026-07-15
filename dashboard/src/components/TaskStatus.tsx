@@ -232,12 +232,11 @@ export function TaskStatusView() {
                           onClick={() => toggleCat(g.category)} style={{ cursor: "pointer" }} />
                         <text x={P.x} y={P.y - 2} textAnchor="middle" fontSize={14} fontWeight={700} fill={isCatSel(g.category) ? "#fff" : c} style={{ pointerEvents: "none" }}>{g.category}</text>
                         <text x={P.x} y={P.y + 14} textAnchor="middle" fontSize={11.5} fill={isCatSel(g.category) ? "rgba(255,255,255,0.88)" : "#8a92a0"} style={{ pointerEvents: "none" }}>총 {g.tasks.length} · 진행 {g.active}</text>
-                        {g.depts.length > 0 && <text x={P.x} y={P.y + H / 2 + 16} textAnchor="middle" fontSize={10.5} fill="#a0a6b0">{g.depts.slice(0, 3).join(" · ")}</text>}
                       </g>
                     );
                   })}
                 </svg>
-                <div className="task-legend"><span>분류 박스·담당자 점 클릭 → 아래 업무표 필터 · 박스 아래 회색 = 연관부서</span></div>
+                <div className="task-legend"><span>업무분류 박스 클릭 → 아래 업무표가 그 분류만 필터</span></div>
               </>
             );
           })()}
@@ -341,8 +340,22 @@ export function TaskStatusView() {
           </button>
         </div>
 
-        {/* 구성원별 현황 (필터) — 이름 클릭하면 보드·표가 그 사람 업무만 */}
-        <div className="member-row">
+        {/* 구성원별 현황 (필터) — 이름 클릭하면 보드·표가 그 사람 업무만, 전체보기로 복귀 */}
+        <div style={{ display: "flex", gap: 12, alignItems: "stretch", marginBottom: 16 }}>
+          <button
+            onClick={() => { setSelected([]); setOpenTask(null); }}
+            title="전체 구성원 업무 보기(기본)"
+            style={{
+              flex: "0 0 auto", cursor: "pointer", fontSize: 14, fontWeight: 700,
+              padding: "0 18px", borderRadius: 12, whiteSpace: "nowrap",
+              border: selected.length === 0 ? "1px solid #4338ca" : "1px solid var(--border)",
+              background: selected.length === 0 ? "#4338ca" : "#fff",
+              color: selected.length === 0 ? "#fff" : "#475569",
+            }}
+          >
+            👥 전체보기
+          </button>
+          <div className="member-row" style={{ flex: 1, marginBottom: 0 }}>
           {people.map((p) => {
             const bl = busyLevel(p.activeOwned, p.stale);
             const here = (loc[p.name] ?? "내근") === "내근";
@@ -353,6 +366,7 @@ export function TaskStatusView() {
                 <div onClick={() => toggle(p.name)} style={{ cursor: "pointer", minWidth: 0 }}>
                   <div className="pcard__nm">{p.name}</div>
                   <div className="pcard__rl">{p.role}</div>
+                  <span className="busy-badge" style={{ color: bl.color, background: bl.bg, marginTop: 4 }} title="진행 중 담당 업무량 기준 자동 판단">{bl.label}</span>
                 </div>
                 <div className="pcard__cnts">
                   <div><div className="pcard__n">{p.owned}</div><div className="pcard__l">담당</div></div>
@@ -363,13 +377,10 @@ export function TaskStatusView() {
                   style={{ color: here ? "#0369a1" : "#c2410c", background: here ? "#e0f2fe" : "#ffedd5" }}>
                   {here ? "🏢 내근" : "🚗 외근"}
                 </button>
-                <span className="busy-badge" style={{ color: bl.color, background: bl.bg }} title="진행 중 담당 업무량 기준 자동 판단">{bl.label}</span>
               </div>
             );
           })}
-          {selected.length > 0 && (
-            <button className="sync-btn" style={{ alignSelf: "center" }} onClick={() => { setSelected([]); setOpenTask(null); }}>전체 보기</button>
-          )}
+          </div>
         </div>
 
         <div className="task-board">
