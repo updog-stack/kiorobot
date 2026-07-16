@@ -152,8 +152,8 @@ export function TrMetrics() {
   const amtMonthly = view.monthly.map((m) => ({ month: m.month, amount: amtByMonth.get(m.month) ?? 0 }));
   const scopeLabel =
     scope === "all" ? "합산(코밴+다우데이타+KICC)"
-    : scope === "AMUDO" ? "아무도없개(코밴+다우 매장명 기준)"
-    : scope === "DAIN" ? "다인(전체 − 아무도없개)"
+    : scope === "AMUDO" ? "아무도없개"
+    : scope === "DAIN" ? "다인아이앤씨"
     : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
   // 차트 헤더의 다인/아무도없개 토글(상단 탭과 같은 scope 공유 — 어느 쪽이든 바꾸면 전체 연동)
@@ -165,7 +165,7 @@ export function TrMetrics() {
   const splitButtons = hasAmudo ? (
     <div style={{ display: "flex", gap: 6 }}>
       <button style={pill(scope === "DAIN")} onClick={() => setScope(scope === "DAIN" ? "all" : "DAIN")} title="전체 − 아무도없개">
-        📘 다인
+        📘 다인아이앤씨
       </button>
       <button style={pill(scope === "AMUDO")} onClick={() => setScope(scope === "AMUDO" ? "all" : "AMUDO")} title="코밴+다우 매장명에 '아무도없개' 포함">
         🍦 아무도없개
