@@ -158,7 +158,7 @@ export function TrMetrics() {
   const dainTotal = Math.max(0, aug.combined.total - amudoTotal);
   const scopeLabel =
     scope === "all" ? "합산(코밴+다우데이타+KICC)"
-    : scope === "AMUDO" ? "아무도없개(코밴 매장명 기준)"
+    : scope === "AMUDO" ? "아무도없개(코밴+다우 매장명 기준)"
     : scope === "DAIN" ? "다인(전체 − 아무도없개)"
     : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
@@ -205,7 +205,7 @@ export function TrMetrics() {
           <div className="metric__amount">{cnt(view.total)}</div>
           <div className="metric__hint">
             {data.year}년 1월~{currentMonth ? `${currentMonth.month}월` : "현재"} ·{" "}
-            {scope === "all" ? "코밴+다우데이타+KICC" : scope === "AMUDO" ? "아무도없개(코밴)" : scope === "DAIN" ? "다인(전체−아무도없개)" : scope}
+            {scope === "all" ? "코밴+다우데이타+KICC" : scope === "AMUDO" ? "아무도없개(코밴+다우)" : scope === "DAIN" ? "다인(전체−아무도없개)" : scope}
           </div>
         </section>
         <section className="metric">

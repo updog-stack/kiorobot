@@ -1,14 +1,17 @@
-// 아무도없개 매출(결제건수·금액) — 코밴 '가맹점별 매출금액 구간집계'(mWork/fixedrate.aspx)에서 월별 집계.
-//   · 가맹점명이 '아무도없개'(오타·띄어쓰기 변형 포함, /[아이]무도\s*없개/)인 매장만 합산.
-//   · 대리점 A25700(다인)·A25701(아무도없개) 둘 다 조회 후 사업자번호로 union(대리점 이동 대비).
-//   · 2026-06부터 현재월까지. 과거월은 캐시 재사용, 현재월만 재조회(증분).
-//   저장: server/data/amudo-sales.json { updatedAt, months: { "2026-06": {count, amount, stores} } }
+// 아무도없개 매출(결제건수·금액) — 코밴 + 다우데이타에서 가맹점명이 '아무도없개'인 매장만 월별 집계.
+//   · 코밴: '가맹점별 매출금액 구간집계'(mWork/fixedrate.aspx), 대리점 A25700·A25701 union.
+//   · 다우: '가맹점 일별실적'(frmLst_merchDayTran) 엑셀에서 가맹점명 매칭 행 합산.
+//   · 매칭: /[아이]무도\s*없개/ (오타·띄어쓰기 변형 포함).
+//   · 2026-01부터 현재월까지. 과거월은 VAN별 캐시 재사용, 현재월만 재조회(증분).
+//   저장: data/amudo-sales.json { updatedAt, months: { "2026-01": {count, amount, stores, kovan:{...}, ddwm:{...}} } }
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { chromium } from "playwright";
+import * as XLSX from "xlsx";
+import { ddwmLogin } from "./lib/ddwm-login.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, "data", "amudo-sales.json");
@@ -57,45 +60,126 @@ async function queryAmudo(page, sd, ed, mng) {
   throw lastErr;
 }
 
+// ===== 다우데이타(가맹점 일별실적) — 가맹점명 '아무도없개' 행 월별 합산 =====
+const DDWM_PAGE = "https://van.daoudata.co.kr/pview/Result/Partner/frmLst_merchDayTran";
+
+// 엑셀 그리드에서 가맹점명·합계건수·합계금액 컬럼 탐지 후 아무도없개 매장 합산
+function ddwmAmudo(grid) {
+  const h0 = (grid[0] || []).map((s) => String(s ?? "").trim());
+  const h1 = (grid[1] || []).map((s) => String(s ?? "").trim());
+  let cntCol = -1, amtCol = -1, nameCol = -1;
+  for (let i = 0; i < h0.length; i++) {
+    if (h0[i] === "합계" && h1[i] === "건수" && cntCol < 0) cntCol = i;
+    if (h0[i] === "합계" && h1[i] === "금액" && amtCol < 0) amtCol = i;
+  }
+  for (let r = 0; r < Math.min(3, grid.length) && nameCol < 0; r++) {
+    const row = (grid[r] || []).map((s) => String(s ?? "").trim());
+    const j = row.findIndex((c) => c === "가맹점명" || c === "가맹점" || c === "상호" || c === "상호명");
+    if (j >= 0) nameCol = j;
+  }
+  if (cntCol < 0) cntCol = 9;
+  if (amtCol < 0) amtCol = 10;
+  if (nameCol < 0) nameCol = 1;
+  let count = 0, amount = 0; const stores = new Set();
+  for (const r of grid) {
+    const name = String(r[nameCol] ?? "").trim();
+    if (!name || name === "합계" || name === "가맹점명") continue;
+    if (!AMUDO_RE.test(name)) continue;
+    count += num(r[cntCol]); amount += num(r[amtCol]); stores.add(name);
+  }
+  return { count, amount, stores: stores.size, cols: { cntCol, amtCol, nameCol } };
+}
+
+async function queryDdwm(page, ym) {
+  await page.fill("#selectMonth", ym);
+  await page.click("a.searchDD");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(2000);
+  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 40000 }), page.click("a.saveExcel")]);
+  const wb = XLSX.read(readFileSync(await dl.path()), { type: "buffer" });
+  const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, blankrows: false, defval: "" });
+  return ddwmAmudo(grid);
+}
+
+function targetMonths(months, curYm, van) {
+  const out = [];
+  const [sy, sm] = START_YM.split("-").map(Number);
+  const [cy, cm] = curYm.split("-").map(Number);
+  for (let y = sy, m = sm; y < cy || (y === cy && m <= cm); ) {
+    const ym = `${y}-${String(m).padStart(2, "0")}`;
+    if (ym === curYm || !months[ym]?.[van]) out.push(ym); // 현재월 재조회, 과거월은 해당 VAN 캐시 없을 때만
+    m += 1; if (m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+
 async function main() {
   const prev = readJsonSafe(OUT) || { months: {} };
   const months = { ...(prev.months || {}) };
   const now = new Date();
   const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  // 수집 대상 월: START_YM ~ 현재월 (과거월 캐시 있으면 skip, 현재월은 항상 재조회)
-  const targets = [];
-  const [sy, sm] = START_YM.split("-").map(Number);
-  for (let y = sy, m = sm; y < now.getFullYear() || (y === now.getFullYear() && m <= now.getMonth() + 1); ) {
-    const ym = `${y}-${String(m).padStart(2, "0")}`;
-    if (ym === curYm || !months[ym]) targets.push(ym);
-    m += 1; if (m > 12) { m = 1; y += 1; }
+
+  // ── 코밴 ──
+  const kTargets = targetMonths(months, curYm, "kovan");
+  if (kTargets.length) {
+    const browser = await chromium.launch({ headless: true });
+    const page = await (await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })).newPage();
+    try {
+      await kovanLogin(page);
+      for (const ym of kTargets) {
+        const [y, m] = ym.split("-").map(Number);
+        const lastD = new Date(y, m, 0).getDate();
+        const isCur = ym === curYm;
+        const sd = `${yy(y)}${String(m).padStart(2, "0")}01`;
+        const ed = isCur
+          ? `${yy(now.getFullYear())}${String(now.getMonth() + 1).padStart(2, "0")}${String(Math.max(1, now.getDate() - 1)).padStart(2, "0")}`
+          : `${yy(y)}${String(m).padStart(2, "0")}${String(lastD).padStart(2, "0")}`;
+        try {
+          const merged = new Map();
+          for (const mng of MNG_CODES) {
+            const map = await queryAmudo(page, sd, ed, mng);
+            for (const [k, v] of map) if (!merged.has(k)) merged.set(k, v);
+          }
+          let count = 0, amount = 0; const stores = new Set();
+          for (const v of merged.values()) { count += v.cnt; amount += v.amt; stores.add(v.name); }
+          months[ym] = { ...(months[ym] || {}), kovan: { count, amount, stores: stores.size } };
+          console.log(`  [코밴] ${ym}: ${count.toLocaleString()}건 · ${amount.toLocaleString()}원 · ${stores.size}개${isCur ? " (진행 중)" : ""}`);
+        } catch (e) { console.error(`  [코밴] ${ym} 실패: ${e.message}`); }
+      }
+    } finally { await browser.close(); }
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const page = await (await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })).newPage();
-  try {
-    await kovanLogin(page);
-    for (const ym of targets) {
-      const [y, m] = ym.split("-").map(Number);
-      const lastD = new Date(y, m, 0).getDate();
-      const sd = `${yy(y)}${String(m).padStart(2, "0")}01`;
-      const isCur = ym === curYm;
-      const ed = isCur
-        ? `${yy(now.getFullYear())}${String(now.getMonth() + 1).padStart(2, "0")}${String(Math.max(1, now.getDate() - 1)).padStart(2, "0")}` // 어제까지
-        : `${yy(y)}${String(m).padStart(2, "0")}${String(lastD).padStart(2, "0")}`;
-      try {
-        const merged = new Map();
-        for (const mng of MNG_CODES) {
-          const map = await queryAmudo(page, sd, ed, mng);
-          for (const [k, v] of map) if (!merged.has(k)) merged.set(k, v); // 사업자번호|구분 dedup
-        }
-        let count = 0, amount = 0; const stores = new Set();
-        for (const v of merged.values()) { count += v.cnt; amount += v.amt; stores.add(v.name); }
-        months[ym] = { count, amount, stores: stores.size, partial: isCur || undefined };
-        console.log(`  ${ym}: ${count.toLocaleString()}건 · ${amount.toLocaleString()}원 · ${stores.size}개 매장${isCur ? " (진행 중)" : ""}`);
-      } catch (e) { console.error(`  ${ym} 실패: ${e.message}`); }
-    }
-  } finally { await browser.close(); }
+  // ── 다우데이타 ──
+  const dTargets = targetMonths(months, curYm, "ddwm");
+  if (dTargets.length) {
+    const browser = await chromium.launch({ headless: true });
+    const page = await (await browser.newContext({ ignoreHTTPSErrors: true, acceptDownloads: true })).newPage();
+    try {
+      await ddwmLogin(page);
+      await page.goto(DDWM_PAGE, { waitUntil: "networkidle", timeout: 40000 });
+      await page.waitForTimeout(1500);
+      let firstLog = true;
+      for (const ym of dTargets) {
+        const isCur = ym === curYm;
+        try {
+          const { count, amount, stores, cols } = await queryDdwm(page, ym);
+          months[ym] = { ...(months[ym] || {}), ddwm: { count, amount, stores } };
+          console.log(`  [다우] ${ym}: ${count.toLocaleString()}건 · ${amount.toLocaleString()}원 · ${stores}개${isCur ? " (진행 중)" : ""}`);
+          if (firstLog) { console.log(`        (컬럼 탐지: 가맹점명=${cols.nameCol}, 건수=${cols.cntCol}, 금액=${cols.amtCol})`); firstLog = false; }
+        } catch (e) { console.error(`  [다우] ${ym} 실패: ${e.message}`); }
+      }
+    } finally { await browser.close(); }
+  }
+
+  // ── VAN 합산 → count/amount ──
+  for (const ym of Object.keys(months)) {
+    const k = months[ym].kovan || { count: 0, amount: 0, stores: 0 };
+    const d = months[ym].ddwm || { count: 0, amount: 0, stores: 0 };
+    months[ym].count = k.count + d.count;
+    months[ym].amount = k.amount + d.amount;
+    months[ym].stores = k.stores + d.stores; // VAN별 매장수 단순합(참고치)
+    months[ym].partial = ym === curYm || undefined;
+  }
 
   await mkdir(dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify({ updatedAt: new Date().toISOString(), months }, null, 2));
