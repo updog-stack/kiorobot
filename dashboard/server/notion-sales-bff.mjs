@@ -419,6 +419,7 @@ app.get("/api/terminal-total", async (_req, res) => {
 const AMUDO_SALES_JSON = join(__dirname, "data", "amudo-sales.json");
 app.get("/api/amudo-sales", async (_req, res) => {
   try {
+    res.set("Cache-Control", "no-store");
     res.json((await readJson(AMUDO_SALES_JSON)) ?? { months: {} });
   } catch (e) {
     res.status(500).json({ error: String(e?.message ?? e) });

@@ -52,7 +52,7 @@ export function TrMetrics() {
     fetchTr()
       .then((d) => alive && setData(d))
       .catch((e) => alive && setError(String(e)));
-    fetch("/api/amudo-sales")
+    fetch("/api/amudo-sales", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => alive && setAmudo(d?.months ?? {}))
       .catch(() => alive && setAmudo({}));
