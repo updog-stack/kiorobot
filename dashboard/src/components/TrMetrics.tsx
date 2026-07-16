@@ -44,19 +44,40 @@ export function TrMetrics() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [scope, setScope] = useState("all"); // "all" | van
+  const [scope, setScope] = useState("all"); // "all" | van | "DAIN" | "AMUDO"
+  const [amudo, setAmudo] = useState<Record<string, { count: number; amount: number }> | null>(null);
 
   useEffect(() => {
     let alive = true;
     fetchTr()
       .then((d) => alive && setData(d))
       .catch((e) => alive && setError(String(e)));
+    fetch("/api/amudo-sales")
+      .then((r) => r.json())
+      .then((d) => alive && setAmudo(d?.months ?? {}))
+      .catch(() => alive && setAmudo({}));
     return () => {
       alive = false;
     };
   }, []);
 
   const aug = useMemo(() => (data ? augment(data) : null), [data]);
+
+  // 아무도없개(코밴 매장명 매칭분) — 올해 월별 건수·금액. 다인 = 합산 − 아무도없개.
+  const amudoByMonth = useMemo(() => {
+    const c = new Map<number, number>(), a = new Map<number, number>();
+    const yr = data?.year;
+    if (amudo && yr) {
+      for (const [ym, v] of Object.entries(amudo)) {
+        if (!ym.startsWith(`${yr}-`)) continue;
+        const mo = Number(ym.slice(5, 7));
+        c.set(mo, v.count || 0); a.set(mo, v.amount || 0);
+      }
+    }
+    return { c, a };
+  }, [amudo, data]);
+  const amudoTotal = useMemo(() => [...amudoByMonth.c.values()].reduce((s, x) => s + x, 0), [amudoByMonth]);
+  const hasAmudo = amudoTotal > 0;
 
   async function handleSync() {
     setSyncing(true);
@@ -73,11 +94,19 @@ export function TrMetrics() {
   const view = useMemo(() => {
     if (!aug) return { monthly: [] as TrMonth[], total: 0, avg: 0 };
     if (scope === "all") return aug.combined;
+    if (scope === "AMUDO" || scope === "DAIN") {
+      const monthly = aug.combined.monthly.map((m) => {
+        const am = amudoByMonth.c.get(m.month) ?? 0;
+        return { month: m.month, count: scope === "AMUDO" ? am : Math.max(0, m.count - am) };
+      });
+      const total = monthly.reduce((s, x) => s + x.count, 0);
+      return { monthly, total, avg: monthly.length ? total / monthly.length : 0 };
+    }
     const v = aug.vans.find((x) => x.van === scope);
     return v
       ? { monthly: v.monthly, total: v.total, avg: v.avg }
       : { monthly: [], total: 0, avg: 0 };
-  }, [aug, scope]);
+  }, [aug, scope, amudoByMonth]);
 
   // 선택 VAN(scope)의 현재 연도 월별 결제금액 — series(코밴/다우) + KICC 정적값
   const amtByMonth = useMemo(() => {
@@ -91,12 +120,19 @@ export function TrMetrics() {
       const kov = s.kovanAmountFilled?.[i] ?? s.kovanAmount?.[i] ?? 0;
       const dao = s.ddwmAmount?.[i] ?? 0;
       const kic = KICC_AMOUNT[yr]?.[mo - 1] ?? 0;
+      const amu = amudoByMonth.a.get(mo) ?? 0;
       const v =
-        scope === "all" ? kov + dao + kic : scope === "KOVAN" ? kov : scope === "DAOUDATA" ? dao : scope === "KICC" ? kic : 0;
+        scope === "all" ? kov + dao + kic
+        : scope === "KOVAN" ? kov
+        : scope === "DAOUDATA" ? dao
+        : scope === "KICC" ? kic
+        : scope === "AMUDO" ? amu
+        : scope === "DAIN" ? Math.max(0, kov + dao + kic - amu)
+        : 0;
       map.set(mo, v);
     });
     return map;
-  }, [data, scope]);
+  }, [data, scope, amudoByMonth]);
 
   const syncButton = (
     <button className="sync-btn" onClick={handleSync} disabled={syncing}>
@@ -119,7 +155,12 @@ export function TrMetrics() {
   const amtAvg = view.monthly.length ? amtTotal / view.monthly.length : 0;
   const thisMonthAmt = currentMonth ? amtByMonth.get(currentMonth.month) ?? 0 : 0;
   const amtMonthly = view.monthly.map((m) => ({ month: m.month, amount: amtByMonth.get(m.month) ?? 0 }));
-  const scopeLabel = scope === "all" ? "합산(코밴+다우데이타+KICC)" : aug.vans.find((v) => v.van === scope)?.label ?? scope;
+  const dainTotal = Math.max(0, aug.combined.total - amudoTotal);
+  const scopeLabel =
+    scope === "all" ? "합산(코밴+다우데이타+KICC)"
+    : scope === "AMUDO" ? "아무도없개(코밴 매장명 기준)"
+    : scope === "DAIN" ? "다인(전체 − 아무도없개)"
+    : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
   return (
     <div className="sales">
@@ -145,6 +186,17 @@ export function TrMetrics() {
             {v.label} ({cnt(v.total)})
           </button>
         ))}
+        {hasAmudo && (
+          <>
+            <span style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "4px 2px" }} />
+            <button className={scope === "DAIN" ? "is-active" : ""} onClick={() => setScope("DAIN")} title="전체 − 아무도없개">
+              🏢 다인 ({cnt(dainTotal)})
+            </button>
+            <button className={scope === "AMUDO" ? "is-active" : ""} onClick={() => setScope("AMUDO")} title="코밴 매장명에 '아무도없개' 포함(오타·띄어쓰기 변형 포함)">
+              🍦 아무도없개 ({cnt(amudoTotal)})
+            </button>
+          </>
+        )}
       </div>
 
       <div className="sales__kpis">
@@ -153,7 +205,7 @@ export function TrMetrics() {
           <div className="metric__amount">{cnt(view.total)}</div>
           <div className="metric__hint">
             {data.year}년 1월~{currentMonth ? `${currentMonth.month}월` : "현재"} ·{" "}
-            {scope === "all" ? "코밴+다우데이타+KICC" : scope}
+            {scope === "all" ? "코밴+다우데이타+KICC" : scope === "AMUDO" ? "아무도없개(코밴)" : scope === "DAIN" ? "다인(전체−아무도없개)" : scope}
           </div>
         </section>
         <section className="metric">

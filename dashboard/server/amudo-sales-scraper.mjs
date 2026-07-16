@@ -18,7 +18,7 @@ const readJsonSafe = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); 
 const num = (v) => Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 const yy = (y) => String(y).slice(2);
 const AMUDO_RE = /[아이]무도\s*없개/; // 아무도없개 + 아무도 없개 + 이무도없개
-const START_YM = "2026-06";
+const START_YM = "2026-01"; // 2026년 전체(다인/아무도없개 분리 뷰용). 과거월은 캐시 재사용·현재월만 재조회.
 const MNG_CODES = ["A25700", "A25701"]; // 다인 · 아무도없개
 const cells = (tr) => [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim());
 
