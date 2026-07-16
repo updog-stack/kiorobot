@@ -2139,6 +2139,78 @@ app.get("/api/tasks/summary", async (req, res) => {
   }
 });
 
+// ===== 담당업무 심층분석 (직원별 주력 업무·협업·거래처 AI 서술) =====
+const respAnalysisCache = new Map(); // key assignee → { at, sig, data }
+const RESP_TTL = 30 * 60 * 1000;
+
+app.get("/api/responsibility/analysis", async (req, res) => {
+  try {
+    const assignee = String(req.query.assignee || "").trim();
+    if (!assignee) return res.status(400).json({ error: "assignee 가 필요합니다" });
+
+    const now = Date.now();
+    if (!tasksCache.data || now - tasksCache.at > TTL_MS) tasksCache = { at: now, data: await loadTasks() };
+    const mine = tasksCache.data.filter((t) => t.assignee === assignee && !t.trash);
+
+    // 집계
+    const byCat = {}; for (const t of mine) { const c = t.category || "미분류"; byCat[c] = (byCat[c] || 0) + 1; }
+    const collab = {}; for (const t of mine) for (const n of t.collab || []) collab[n] = (collab[n] || 0) + 1;
+    const partners = {}; for (const t of mine) for (const e of t.ext || []) partners[e] = (partners[e] || 0) + 1;
+    const requesters = {}; for (const t of mine) if (t.requester) requesters[t.requester] = (requesters[t.requester] || 0) + 1;
+    const depts = {}; for (const t of mine) for (const d of t.depts || []) depts[d] = (depts[d] || 0) + 1;
+    const active = mine.filter((t) => t.status !== "처리완료").length;
+    const stats = { count: mine.length, active, byCategory: byCat, collaborators: collab, partners, requesters, depts };
+
+    const sig = mine.map((t) => `${t.id}:${t.status}`).join("|");
+    const force = req.query.force === "1";
+    const hit = respAnalysisCache.get(assignee);
+    if (!force && hit && hit.sig === sig && now - hit.at < RESP_TTL)
+      return res.json({ ...hit.data, cached: true, generatedAt: new Date(hit.at).toISOString() });
+
+    if (!process.env.ANTHROPIC_API_KEY)
+      return res.json({ assignee, ...stats, analysis: null, error: "ANTHROPIC_API_KEY 미설정 — AI 분석 비활성", generatedAt: null });
+    if (mine.length === 0)
+      return res.json({ assignee, ...stats, analysis: null, note: `${assignee}님의 담당 업무가 없습니다`, generatedAt: new Date().toISOString() });
+
+    const lines = mine.slice(0, 60).map((t) =>
+      `- [${t.status}] ${t.name} · 분류 ${t.category || "미분류"}` +
+      `${(t.collab || []).length ? ` · 협업 ${t.collab.join(",")}` : ""}` +
+      `${(t.ext || []).length ? ` · 거래처 ${t.ext.join(",")}` : ""}` +
+      `${t.requester ? ` · 요청 ${t.requester}` : ""}` +
+      `${(t.depts || []).length ? ` · 부서 ${t.depts.join(",")}` : ""}`
+    ).join("\n");
+
+    const system =
+      "너는 중소기업 팀장을 돕는 조직 분석가다. 한 직원의 담당 업무 데이터를 읽고, 이 사람이 '무슨 일을 맡고 누구와 어떻게 협업하는지'를 팀장이 한눈에 파악하도록 한국어로 분석한다. 데이터에 없는 내용은 지어내지 말 것. 반드시 아래 JSON만 출력(코드펜스·설명 금지):\n" +
+      '{"headline":"이 사람의 역할을 한 문장으로","mainAreas":["주력 업무를 분류별로 2~4개, 무슨 일인지"],"collaboration":["내부 협업 관계 2~4개, 누구와 무엇을"],"partners":["거래처/외부 협업 0~3개"],"notes":["특이점·업무 쏠림·비어있는 정보 등 1~3개"]}';
+    const user =
+      `직원: ${assignee}\n담당 ${mine.length}건(진행 ${active})\n` +
+      `분류별: ${Object.entries(byCat).map(([k, v]) => `${k} ${v}`).join(", ") || "없음"}\n` +
+      `협업자: ${Object.entries(collab).map(([k, v]) => `${k}(${v})`).join(", ") || "없음"}\n` +
+      `거래처: ${Object.keys(partners).join(", ") || "없음"}\n` +
+      `요청자: ${Object.keys(requesters).join(", ") || "없음"}\n` +
+      `연관부서: ${Object.keys(depts).join(", ") || "없음"}\n\n업무 목록:\n${lines}`;
+
+    let txt = await claudeText(system, user, 1500);
+    txt = txt.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const parsed = JSON.parse(txt);
+    const analysis = {
+      headline: String(parsed.headline || ""),
+      mainAreas: (parsed.mainAreas || []).filter(Boolean).map(String),
+      collaboration: (parsed.collaboration || []).filter(Boolean).map(String),
+      partners: (parsed.partners || []).filter(Boolean).map(String),
+      notes: (parsed.notes || []).filter(Boolean).map(String),
+    };
+    const data = { assignee, ...stats, analysis };
+    respAnalysisCache.set(assignee, { at: now, sig, data });
+    res.json({ ...data, cached: false, generatedAt: new Date(now).toISOString() });
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("JSON")) return res.status(502).json({ error: "분석 형식 오류 — 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
 // ===== CS 상담 요약 (업무내용에 '채널톡 참고' 표시 시, 담당자의 그날 채널톡 상담을 자동 요약) =====
 // 영업폰 인입은 채널톡 Open API 미제공 → 수기 작성 몫. 매장명 식별 불가 시 전화번호로 대체.
 const csDaySummaryCache = new Map(); // key `${assignee}|${date}` → { at, data }

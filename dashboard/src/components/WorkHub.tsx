@@ -3,8 +3,9 @@ import { TaskStatusView } from "./TaskStatus";
 import { CsStatus } from "./CsStatus";
 import { CallHeatmap } from "./CallHeatmap";
 import { WorkLog } from "./WorkLog";
+import { ResponsibilityView } from "./Responsibility";
 
-type Tab = "tasks" | "cs" | "worklog";
+type Tab = "tasks" | "cs" | "worklog" | "responsibility";
 
 // 업무현황(대표) + CS현황 + 업무일지를 한 메뉴에서 탭으로 전환
 export function WorkHub() {
@@ -21,6 +22,9 @@ export function WorkHub() {
         <button className={tab === "worklog" ? "is-active" : ""} onClick={() => setTab("worklog")}>
           📝 업무일지
         </button>
+        <button className={tab === "responsibility" ? "is-active" : ""} onClick={() => setTab("responsibility")}>
+          🧭 담당업무
+        </button>
       </div>
 
       {tab === "tasks" && <TaskStatusView />}
@@ -36,6 +40,8 @@ export function WorkHub() {
       )}
 
       {tab === "worklog" && <WorkLog />}
+
+      {tab === "responsibility" && <ResponsibilityView />}
     </div>
   );
 }

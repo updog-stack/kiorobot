@@ -94,6 +94,38 @@ export function wantsCsSummary(text?: string | null): boolean {
   return /채널톡\s*(통계|상담)?\s*(로|으로)?\s*참고/.test(text) || /채널톡\s*참고/.test(text);
 }
 
+// ===== 담당업무 심층분석 (직원별) =====
+export interface ResponsibilityAnalysis {
+  headline: string;
+  mainAreas: string[];
+  collaboration: string[];
+  partners: string[];
+  notes: string[];
+}
+export interface ResponsibilityResponse {
+  assignee: string;
+  count: number;
+  active: number;
+  byCategory: Record<string, number>;
+  collaborators: Record<string, number>;
+  partners: Record<string, number>;
+  requesters: Record<string, number>;
+  depts: Record<string, number>;
+  analysis: ResponsibilityAnalysis | null;
+  note?: string;
+  error?: string;
+  cached?: boolean;
+  generatedAt: string | null;
+}
+export async function fetchResponsibilityAnalysis(assignee: string, force = false): Promise<ResponsibilityResponse> {
+  const q = new URLSearchParams({ assignee });
+  if (force) q.set("force", "1");
+  const res = await fetch(`/api/responsibility/analysis?${q.toString()}`);
+  const body = (await res.json()) as ResponsibilityResponse;
+  if (!res.ok) throw new Error((body as { error?: string })?.error || `분석 실패: ${res.status}`);
+  return body;
+}
+
 // "YYYY-MM-DD" (로컬 오늘)
 export function todayIso(): string {
   const d = new Date();
