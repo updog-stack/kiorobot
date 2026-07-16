@@ -157,22 +157,22 @@ export function TrMetrics() {
     : scope === "DAIN" ? "다인(전체 − 아무도없개)"
     : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
-  // 차트 헤더 드롭다운(상단 탭과 같은 scope 공유 — 어느 쪽을 바꿔도 전체 연동)
-  const scopeOptions = [
-    { v: "all", label: "합산" },
-    ...aug.vans.map((v) => ({ v: v.van, label: v.label })),
-    ...(hasAmudo ? [{ v: "DAIN", label: "다인" }, { v: "AMUDO", label: "아무도없개" }] : []),
-  ];
-  const scopeSelect = (
-    <select
-      value={scope}
-      onChange={(e) => setScope(e.target.value)}
-      style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600, padding: "5px 11px", borderRadius: 8, border: "1px solid var(--border)", background: "#fff", cursor: "pointer" }}
-      title="이 필터는 상단 탭과 연동됩니다"
-    >
-      {scopeOptions.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-    </select>
-  );
+  // 차트 헤더의 다인/아무도없개 토글(상단 탭과 같은 scope 공유 — 어느 쪽이든 바꾸면 전체 연동)
+  const pill = (active: boolean): CSSProperties => ({
+    cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "6px 13px", borderRadius: 999, whiteSpace: "nowrap",
+    border: active ? "1px solid #4338ca" : "1px solid var(--border)",
+    background: active ? "#4338ca" : "#fff", color: active ? "#fff" : "#475569",
+  });
+  const splitButtons = hasAmudo ? (
+    <div style={{ display: "flex", gap: 6 }}>
+      <button style={pill(scope === "DAIN")} onClick={() => setScope(scope === "DAIN" ? "all" : "DAIN")} title="전체 − 아무도없개">
+        📘 다인 ({cnt(dainTotal)})
+      </button>
+      <button style={pill(scope === "AMUDO")} onClick={() => setScope(scope === "AMUDO" ? "all" : "AMUDO")} title="코밴+다우 매장명에 '아무도없개' 포함">
+        🍦 아무도없개 ({cnt(amudoTotal)})
+      </button>
+    </div>
+  ) : null;
 
   return (
     <div className="sales">
@@ -198,17 +198,6 @@ export function TrMetrics() {
             {v.label} ({cnt(v.total)})
           </button>
         ))}
-        {hasAmudo && (
-          <>
-            <span style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "4px 2px" }} />
-            <button className={scope === "DAIN" ? "is-active" : ""} onClick={() => setScope("DAIN")} title="전체 − 아무도없개">
-              🏢 다인 ({cnt(dainTotal)})
-            </button>
-            <button className={scope === "AMUDO" ? "is-active" : ""} onClick={() => setScope("AMUDO")} title="코밴 매장명에 '아무도없개' 포함(오타·띄어쓰기 변형 포함)">
-              🍦 아무도없개 ({cnt(amudoTotal)})
-            </button>
-          </>
-        )}
       </div>
 
       <div className="sales__kpis">
@@ -248,21 +237,21 @@ export function TrMetrics() {
       </div>
 
       <section className="card card--wide">
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
           <h2 className="card__title" style={{ margin: 0 }}>월별 거래 건수 — {scopeLabel}</h2>
-          {scopeSelect}
+          {splitButtons}
         </div>
         <Chart monthly={view.monthly} />
       </section>
 
       {amtTotal > 0 && (
         <section className="card card--wide">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
             <h2 className="card__title" style={{ margin: 0 }}>
               월별 결제 금액 — {scopeLabel}
               {scope === "KOVAN" && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}> (카드 신용+체크·100만원 절삭 근사)</span>}
             </h2>
-            {scopeSelect}
+            {splitButtons}
           </div>
           <AmtChart monthly={amtMonthly} />
         </section>
