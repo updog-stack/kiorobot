@@ -150,7 +150,6 @@ export function TrMetrics() {
   const amtAvg = view.monthly.length ? amtTotal / view.monthly.length : 0;
   const thisMonthAmt = currentMonth ? amtByMonth.get(currentMonth.month) ?? 0 : 0;
   const amtMonthly = view.monthly.map((m) => ({ month: m.month, amount: amtByMonth.get(m.month) ?? 0 }));
-  const dainTotal = Math.max(0, aug.combined.total - amudoTotal);
   const scopeLabel =
     scope === "all" ? "합산(코밴+다우데이타+KICC)"
     : scope === "AMUDO" ? "아무도없개(코밴+다우 매장명 기준)"
@@ -166,10 +165,10 @@ export function TrMetrics() {
   const splitButtons = hasAmudo ? (
     <div style={{ display: "flex", gap: 6 }}>
       <button style={pill(scope === "DAIN")} onClick={() => setScope(scope === "DAIN" ? "all" : "DAIN")} title="전체 − 아무도없개">
-        📘 다인 ({cnt(dainTotal)})
+        📘 다인
       </button>
       <button style={pill(scope === "AMUDO")} onClick={() => setScope(scope === "AMUDO" ? "all" : "AMUDO")} title="코밴+다우 매장명에 '아무도없개' 포함">
-        🍦 아무도없개 ({cnt(amudoTotal)})
+        🍦 아무도없개
       </button>
     </div>
   ) : null;
