@@ -157,6 +157,23 @@ export function TrMetrics() {
     : scope === "DAIN" ? "다인(전체 − 아무도없개)"
     : aug.vans.find((v) => v.van === scope)?.label ?? scope;
 
+  // 차트 헤더 드롭다운(상단 탭과 같은 scope 공유 — 어느 쪽을 바꿔도 전체 연동)
+  const scopeOptions = [
+    { v: "all", label: "합산" },
+    ...aug.vans.map((v) => ({ v: v.van, label: v.label })),
+    ...(hasAmudo ? [{ v: "DAIN", label: "다인" }, { v: "AMUDO", label: "아무도없개" }] : []),
+  ];
+  const scopeSelect = (
+    <select
+      value={scope}
+      onChange={(e) => setScope(e.target.value)}
+      style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600, padding: "5px 11px", borderRadius: 8, border: "1px solid var(--border)", background: "#fff", cursor: "pointer" }}
+      title="이 필터는 상단 탭과 연동됩니다"
+    >
+      {scopeOptions.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+    </select>
+  );
+
   return (
     <div className="sales">
       <div className="sales__toolbar">
@@ -231,16 +248,22 @@ export function TrMetrics() {
       </div>
 
       <section className="card card--wide">
-        <h2 className="card__title">월별 거래 건수 — {scopeLabel}</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <h2 className="card__title" style={{ margin: 0 }}>월별 거래 건수 — {scopeLabel}</h2>
+          {scopeSelect}
+        </div>
         <Chart monthly={view.monthly} />
       </section>
 
       {amtTotal > 0 && (
         <section className="card card--wide">
-          <h2 className="card__title">
-            월별 결제 금액 — {scopeLabel}
-            {scope === "KOVAN" && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}> (카드 신용+체크·100만원 절삭 근사)</span>}
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <h2 className="card__title" style={{ margin: 0 }}>
+              월별 결제 금액 — {scopeLabel}
+              {scope === "KOVAN" && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)" }}> (카드 신용+체크·100만원 절삭 근사)</span>}
+            </h2>
+            {scopeSelect}
+          </div>
           <AmtChart monthly={amtMonthly} />
         </section>
       )}
