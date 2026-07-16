@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type CSSProperties } from "react";
-import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries } from "../lib/tr";
+import { fetchTr, syncTr, type TrData, type TrMonth, type TrVan, type TrSeries, type AmudoMonth } from "../lib/tr";
 import { kicc as kiccSeries, cms as cmsSeries, YEAR, PREV_YEAR, KICC_AMOUNT } from "../lib/overview";
 import { fetchCms } from "../lib/cms";
 import { won, growth } from "../lib/format";
@@ -249,7 +249,7 @@ export function TrMetrics() {
         <div className="table-meta">※ KICC는 자동수집 대상이 아니며 구글시트 참고값(정적)입니다.</div>
       )}
 
-      <TrTrend series={data.series} years={data.years} />
+      <TrTrend series={data.series} years={data.years} amudoMonths={data.amudoMonths} />
 
       <CmsSection />
     </div>
@@ -309,7 +309,7 @@ function AmtChart({ monthly }: { monthly: { month: number; amount: number }[] })
 
 // 월별 결제 추이 — 년도 선택(1년치) · 건수(코밴+다우 스택) + 금액(코밴+다우) · 자동수집·누적
 //   amountOnly=true 면 금액만(매출현황 메뉴에서 재사용, 건수는 거래현황 전용)
-export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeries; years?: number[]; amountOnly?: boolean }) {
+export function TrTrend({ series, years, amountOnly = false, amudoMonths }: { series?: TrSeries; years?: number[]; amountOnly?: boolean; amudoMonths?: Record<string, AmudoMonth> }) {
   const allYears = useMemo(() => {
     if (years && years.length) return [...new Set(years)].filter((y) => y >= 2025).sort((a, b) => a - b);
     if (series) return [...new Set(series.months.map((m) => Number(m.slice(0, 4))))].sort((a, b) => a - b);
@@ -317,6 +317,14 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   }, [years, series]);
   const [selYear, setSelYear] = useState<number | null>(null);
   const year = selYear ?? (allYears.length ? allYears[allYears.length - 1] : null);
+  const [trendScope, setTrendScope] = useState<"all" | "DAIN" | "AMUDO">("all"); // 다인/아무도없개 분리
+
+  // 선택 연도에 아무도없개 데이터가 있으면 토글 노출
+  const yearHasAmudo = useMemo(
+    () => !!amudoMonths && Object.keys(amudoMonths).some((ym) => ym.startsWith(`${year}-`)),
+    [amudoMonths, year]
+  );
+  const scoped = trendScope !== "all";
 
   if (!series || !series.months.length || !year) return null;
 
@@ -337,20 +345,34 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   const kiccAmtCur = KICC_AMOUNT[year] ?? []; // KICC 월별 결제금액(올해만 제공)
 
   // 선택 년도만 필터. 코밴 금액은 filled(실측+추정) 사용, kEst=추정 여부. total = 코밴+다우+KICC(건수)
+  const amuOf = (m: number) => amudoMonths?.[`${year}-${String(m).padStart(2, "0")}`];
   const rows = series.months
     .map((ym, i) => {
       const m = Number(ym.slice(5, 7));
-      const kicc = kiccCur[m - 1] ?? 0;
+      let kovan = series.kovanCount[i];
+      let ddwm = series.ddwmCount[i];
+      let kicc = kiccCur[m - 1] ?? 0;
+      let amt = series.ddwmAmount[i];
+      let kAmt = series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0;
+      let kAmtKicc = kiccAmtCur[m - 1] ?? 0;
+      // 다인/아무도없개 분리 — 아무도없개는 코밴+다우만(KICC 없음), 다인은 합산−아무도없개
+      if (scoped) {
+        const a = amuOf(m);
+        const aK = a?.kovan ?? { count: 0, amount: 0 };
+        const aD = a?.ddwm ?? { count: 0, amount: 0 };
+        if (trendScope === "AMUDO") {
+          kovan = aK.count; ddwm = aD.count; kicc = 0;
+          kAmt = aK.amount; amt = aD.amount; kAmtKicc = 0;
+        } else {
+          kovan = Math.max(0, kovan - aK.count); ddwm = Math.max(0, ddwm - aD.count);
+          kAmt = Math.max(0, kAmt - aK.amount); amt = Math.max(0, amt - aD.amount);
+        }
+      }
       return {
-        m,
-        kovan: series.kovanCount[i],
-        ddwm: series.ddwmCount[i],
-        kicc,
-        total: series.totalCount[i] + kicc,
-        amt: series.ddwmAmount[i],
-        kAmt: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0,
-        kAmtKicc: kiccAmtCur[m - 1] ?? 0,
-        kEst: series.kovanAmountEst?.[i] ?? false,
+        m, kovan, ddwm, kicc,
+        total: kovan + ddwm + kicc,
+        amt, kAmt, kAmtKicc,
+        kEst: scoped ? false : (series.kovanAmountEst?.[i] ?? false),
       };
     })
     .filter((_, i) => series.months[i].startsWith(`${year}-`));
@@ -375,9 +397,9 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
   const prevCnt = prevRows.reduce((s, r) => s + r.total, 0);
   const prevAmt = prevRows.reduce((s, r) => s + r.amt, 0);
   const prevAvg = prevRows.length ? prevAmt / prevRows.length : 0;
-  const gCnt = hasPrev ? growth(yTotalCnt, prevCnt) : null;
-  const gAmt = hasPrev ? growth(yTotalAmt, prevAmt) : null;
-  const gAvg = hasPrev ? growth(rows.length ? yTotalAmt / rows.length : 0, prevAvg) : null;
+  const gCnt = hasPrev && !scoped ? growth(yTotalCnt, prevCnt) : null;
+  const gAmt = hasPrev && !scoped ? growth(yTotalAmt, prevAmt) : null;
+  const gAvg = hasPrev && !scoped ? growth(rows.length ? yTotalAmt / rows.length : 0, prevAvg) : null;
   const compare = (g: ReturnType<typeof growth> | null, prevText: string, label = "동기간") =>
     g ? (
       <div className="metric__compare">
@@ -394,24 +416,32 @@ export function TrTrend({ series, years, amountOnly = false }: { series?: TrSeri
     .map((ym, i) => ({ m: Number(ym.slice(5, 7)), kF: series.kovanAmountFilled?.[i] ?? series.kovanAmount?.[i] ?? 0, est: series.kovanAmountEst?.[i] ?? false, ym }))
     .filter((x) => x.ym.startsWith(`${prevYear}-`) && curMonthNums.includes(x.m));
   const prevKAmt = prevKRows.reduce((s, r) => s + r.kF, 0);
-  const gKAmt = prevKAmt > 0 ? growth(yKovanAmt, prevKAmt) : null;
-  const gKAvg = prevKAmt > 0 && rows.length && prevKRows.length ? growth(yKovanAmt / rows.length, prevKAmt / prevKRows.length) : null;
+  const gKAmt = prevKAmt > 0 && !scoped ? growth(yKovanAmt, prevKAmt) : null;
+  const gKAvg = prevKAmt > 0 && rows.length && prevKRows.length && !scoped ? growth(yKovanAmt / rows.length, prevKAmt / prevKRows.length) : null;
   const kEstInCompare = prevKRows.some((r) => r.est) || yearHasEst;
 
   return (
     <>
       <div className="ov__sec-h" style={{ marginTop: 8 }}>
-        <h2>{amountOnly ? "VAN 결제금액" : "월별 결제 추이"}</h2>
+        <h2>{amountOnly ? "VAN 결제금액" : "월별 결제 추이"}{trendScope === "AMUDO" ? " · 아무도없개" : trendScope === "DAIN" ? " · 다인" : ""}</h2>
         <span>{amountOnly ? "코밴·다우 가맹점 거래대금(참고) · 매일 08:00 자동수집" : "코밴·다우데이타 · 매일 08:00 자동수집·누적"}</span>
       </div>
 
-      {/* 좌측 상단 년도 필터 */}
+      {/* 좌측 상단 년도 필터 + 다인/아무도없개 분리 */}
       <div className="van-tabs">
         {allYears.map((y) => (
           <button key={y} className={y === year ? "is-active" : ""} onClick={() => setSelYear(y)}>
             {y}년
           </button>
         ))}
+        {yearHasAmudo && (
+          <>
+            <span style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "4px 2px" }} />
+            <button className={trendScope === "all" ? "is-active" : ""} onClick={() => setTrendScope("all")}>전체</button>
+            <button className={trendScope === "DAIN" ? "is-active" : ""} onClick={() => setTrendScope("DAIN")}>🏢 다인</button>
+            <button className={trendScope === "AMUDO" ? "is-active" : ""} onClick={() => setTrendScope("AMUDO")}>🍦 아무도없개</button>
+          </>
+        )}
       </div>
 
       <div className="sales__kpis">

@@ -26,6 +26,9 @@ export interface TrSeries {
   kovanAmountEst?: boolean[]; // 해당 월이 추정치인지
 }
 
+export interface AmudoVan { count: number; amount: number }
+export interface AmudoMonth { count: number; amount: number; kovan?: AmudoVan; ddwm?: AmudoVan }
+
 export interface TrData {
   updatedAt: string | null;
   year: number;
@@ -33,8 +36,8 @@ export interface TrData {
   vans: TrVan[];
   combined: { monthly: TrMonth[]; total: number; avg: number };
   series?: TrSeries;
-  /** 아무도없개(코밴+다우 매장명 매칭) 월별 — "2026-01": {count, amount} */
-  amudoMonths?: Record<string, { count: number; amount: number }>;
+  /** 아무도없개(코밴+다우 매장명 매칭) 월별 — "2026-01": {count, amount, kovan, ddwm} */
+  amudoMonths?: Record<string, AmudoMonth>;
   note?: string;
   syncWarning?: string;
 }
