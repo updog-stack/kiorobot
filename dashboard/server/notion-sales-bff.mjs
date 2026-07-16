@@ -3321,10 +3321,16 @@ app.delete("/api/schedule/:eventId", async (req, res) => {
 const distDir = join(dirname(__dirname), "dist");
 const indexHtml = join(distDir, "index.html");
 if (existsSync(distDir)) {
-  app.use(express.static(distDir));
+  // 해시 붙은 assets 는 장기 캐시 OK, index.html 은 항상 재검증(no-cache) → 배포 즉시 새 번들 로드
+  app.use(express.static(distDir, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("index.html")) res.setHeader("Cache-Control", "no-cache");
+    },
+  }));
   app.use((req, res, next) => {
     // /api 가 아닌 GET 요청은 SPA(index.html)로 (새로고침·딥링크 대응)
     if (req.method === "GET" && !req.path.startsWith("/api") && existsSync(indexHtml)) {
+      res.setHeader("Cache-Control", "no-cache");
       return res.sendFile(indexHtml);
     }
     next();

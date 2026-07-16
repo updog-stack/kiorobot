@@ -43,7 +43,8 @@ export interface TrData {
 }
 
 export async function fetchTr(): Promise<TrData> {
-  const res = await fetch("/api/tr");
+  // 캐시 우회(t 파라미터) — 브라우저가 옛 응답을 재사용해 amudoMonths 등이 누락되는 문제 방지
+  const res = await fetch(`/api/tr?t=${Date.now()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`TR 데이터 조회 실패: ${res.status}`);
   return (await res.json()) as TrData;
 }
