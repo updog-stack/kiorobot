@@ -33,6 +33,8 @@ export interface TrData {
   vans: TrVan[];
   combined: { monthly: TrMonth[]; total: number; avg: number };
   series?: TrSeries;
+  /** 아무도없개(코밴+다우 매장명 매칭) 월별 — "2026-01": {count, amount} */
+  amudoMonths?: Record<string, { count: number; amount: number }>;
   note?: string;
   syncWarning?: string;
 }

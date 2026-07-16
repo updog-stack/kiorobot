@@ -45,17 +45,12 @@ export function TrMetrics() {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [scope, setScope] = useState("all"); // "all" | van | "DAIN" | "AMUDO"
-  const [amudo, setAmudo] = useState<Record<string, { count: number; amount: number }> | null>(null);
 
   useEffect(() => {
     let alive = true;
     fetchTr()
       .then((d) => alive && setData(d))
       .catch((e) => alive && setError(String(e)));
-    fetch("/api/amudo-sales", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => alive && setAmudo(d?.months ?? {}))
-      .catch(() => alive && setAmudo({}));
     return () => {
       alive = false;
     };
@@ -63,19 +58,19 @@ export function TrMetrics() {
 
   const aug = useMemo(() => (data ? augment(data) : null), [data]);
 
-  // 아무도없개(코밴 매장명 매칭분) — 올해 월별 건수·금액. 다인 = 합산 − 아무도없개.
+  // 아무도없개(코밴+다우 매장명 매칭분) — 올해 월별 건수·금액. /api/tr 응답에 실려옴(별도 요청 캐시 방지). 다인 = 합산 − 아무도없개.
   const amudoByMonth = useMemo(() => {
     const c = new Map<number, number>(), a = new Map<number, number>();
     const yr = data?.year;
-    if (amudo && yr) {
-      for (const [ym, v] of Object.entries(amudo)) {
+    if (data?.amudoMonths && yr) {
+      for (const [ym, v] of Object.entries(data.amudoMonths)) {
         if (!ym.startsWith(`${yr}-`)) continue;
         const mo = Number(ym.slice(5, 7));
         c.set(mo, v.count || 0); a.set(mo, v.amount || 0);
       }
     }
     return { c, a };
-  }, [amudo, data]);
+  }, [data]);
   const amudoTotal = useMemo(() => [...amudoByMonth.c.values()].reduce((s, x) => s + x, 0), [amudoByMonth]);
   const hasAmudo = amudoTotal > 0;
 

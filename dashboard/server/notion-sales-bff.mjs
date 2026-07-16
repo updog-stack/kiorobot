@@ -317,6 +317,7 @@ app.get("/api/sales-monthly", async (_req, res) => {
 async function buildTr() {
   const kovan = await readJson(TR_JSON);
   const ddwm = await readJson(TR_DDWM_JSON);
+  const amudo = await readJson(join(__dirname, "data", "amudo-sales.json")); // 아무도없개(코밴+다우 매장명 매칭) 월별
 
   // 다년도 shape 지원(구버전 single-year fallback)
   const yearsOf = (d) => {
@@ -388,11 +389,13 @@ async function buildTr() {
     vans,
     combined: { monthly: combinedMonthly, total: combinedTotal, avg: months.length ? combinedTotal / months.length : 0 },
     series: { months: labels, kovanCount, ddwmCount, totalCount, ddwmAmount, kovanAmount, kovanAmountFilled, kovanAmountEst },
+    amudoMonths: amudo?.months ?? {}, // 아무도없개 월별(코밴+다우) — 다인/아무도없개 분리 뷰용(별도 요청 캐시 방지)
     note: vans.length ? undefined : "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동 수집 후 표시됩니다.",
   };
 }
 
 app.get("/api/tr", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
   res.json(await buildTr());
 });
 
