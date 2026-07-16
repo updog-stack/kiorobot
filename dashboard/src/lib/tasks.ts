@@ -61,6 +61,39 @@ export async function fetchTaskSummary(force = false): Promise<TaskSummaryRespon
   return body;
 }
 
+// ===== CS 채널톡 상담 요약 (업무내용에 '채널톡 참고' 표시 시) =====
+export interface CsSummaryItem {
+  label: string;       // 매장명, 없으면 전화번호
+  store: string | null;
+  phone: string | null;
+  summary: string;
+  url: string | null;
+}
+export interface CsDaySummaryResponse {
+  assignee?: string;
+  date?: string;
+  count: number;
+  items: CsSummaryItem[];
+  note?: string;
+  error?: string;
+  cached?: boolean;
+  generatedAt: string | null;
+}
+export async function fetchCsDaySummary(assignee: string, date: string, force = false): Promise<CsDaySummaryResponse> {
+  const q = new URLSearchParams({ assignee, date });
+  if (force) q.set("force", "1");
+  const res = await fetch(`/api/cs/day-summary?${q.toString()}`);
+  const body = (await res.json()) as CsDaySummaryResponse;
+  if (!res.ok) throw new Error((body as { error?: string })?.error || `CS 요약 실패: ${res.status}`);
+  return body;
+}
+
+// 업무내용에 '채널톡 참고' 류 표시가 있는지
+export function wantsCsSummary(text?: string | null): boolean {
+  if (!text) return false;
+  return /채널톡\s*(통계|상담)?\s*(로|으로)?\s*참고/.test(text) || /채널톡\s*참고/.test(text);
+}
+
 // "YYYY-MM-DD" (로컬 오늘)
 export function todayIso(): string {
   const d = new Date();

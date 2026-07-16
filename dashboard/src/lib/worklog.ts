@@ -45,10 +45,24 @@ export interface WorklogCs {
   byAgent: { name: string; handled: number }[];
 }
 
+export interface WorklogCsStoreItem {
+  label: string;
+  store: string | null;
+  phone: string | null;
+  summary: string;
+  url: string | null;
+}
+export interface WorklogCsStore {
+  assignee: string;
+  items: WorklogCsStoreItem[];
+}
+
 export interface WorklogReport {
   date: string;
   digest?: DailyDigest | null;
   cs?: WorklogCs | null;
+  /** 오늘 채널톡 상담 내용(담당자별·매장별) — 별도 'CS 상담 내역' 섹션 */
+  csStores?: WorklogCsStore[];
   summary: {
     total: number;
     doneToday: number;

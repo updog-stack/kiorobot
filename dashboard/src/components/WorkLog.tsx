@@ -293,6 +293,27 @@ export function WorkLog() {
                     </section>
                   )}
 
+                  {/* CS 상담 내역 (채널톡 매장별 — 영업폰은 수기) */}
+                  {report.csStores && report.csStores.length > 0 && (
+                    <section className="card card--wide wl-span">
+                      <div className="brief-sec-h"><span className="no">💬</span><h2>CS 상담 내역 <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· 채널톡 매장별(영업폰 인입은 수기)</span></h2></div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px 26px" }}>
+                        {report.csStores.map((cs) => (
+                          <div key={cs.assignee}>
+                            <div style={{ fontWeight: 700, marginBottom: 6, color: "#1e40af" }}>{cs.assignee} <span className="muted" style={{ fontWeight: 400 }}>· {cs.items.length}건</span></div>
+                            <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+                              {cs.items.map((it, i) => (
+                                <li key={i} style={{ fontSize: 13.5, lineHeight: 1.5 }}>
+                                  <b>{it.url ? <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{it.label}</a> : it.label}</b> — {it.summary || "(요약 없음)"}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
                   {/* 04 지켜볼 것 */}
                   {report.digest?.watch && report.digest.watch.length > 0 && (
                     <section className="card card--wide">

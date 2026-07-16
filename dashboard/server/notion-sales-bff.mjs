@@ -89,6 +89,9 @@ const SOURCES = [
     dataSourceId: "1bba252e-5579-8267-8d1e-07a5ab6009e6",
     dateProp: "날짜",
     amountProp: "총액(VAT 포함)",
+    // v4 노션동기화는 새 행 금액을 '매출액(시트)'에만 채우고 '총액(VAT 포함)'은 비움 →
+    // 총액이 비면 매출액(시트)로 대체(옛 행=총액, 새 행=매출액시트 모두 집계). (2026-07-16)
+    fallbackProp: "매출액(시트)",
     scale: 1, // 원 단위 (구분별 분포 검증: 기타·라이선스·장비매출 모두 원)
   },
   {
@@ -227,7 +230,8 @@ async function loadSource(src) {
     for (const page of res.results) {
       const props = page.properties ?? {};
       const date = dateOf(props[src.dateProp]);
-      const raw = numberOf(props[src.amountProp]); // 총액(VAT 포함, 숫자·₩)
+      let raw = numberOf(props[src.amountProp]); // 총액(VAT 포함, 숫자·₩)
+      if (raw == null && src.fallbackProp) raw = numberOf(props[src.fallbackProp]); // 총액 비면 매출액(시트)
       if (date && typeof raw === "number") {
         records.push({ date: date.slice(0, 10), amount: Math.round(raw * src.scale) });
       }
@@ -281,7 +285,8 @@ async function buildSalesMonthly() {
     for (const page of res.results) {
       const props = page.properties ?? {};
       const date = dateOf(props[src.dateProp]);
-      const amt = numberOf(props[src.amountProp]); // 총액(VAT 포함, 숫자·₩)
+      let amt = numberOf(props[src.amountProp]); // 총액(VAT 포함, 숫자·₩)
+      if (amt == null && src.fallbackProp) amt = numberOf(props[src.fallbackProp]); // 총액 비면 매출액(시트)
       if (!date || typeof amt !== "number") continue;
       const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7));
       if (y !== curYear || m < 1 || m > 12) continue;
@@ -2134,6 +2139,125 @@ app.get("/api/tasks/summary", async (req, res) => {
   }
 });
 
+// ===== CS 상담 요약 (업무내용에 '채널톡 참고' 표시 시, 담당자의 그날 채널톡 상담을 자동 요약) =====
+// 영업폰 인입은 채널톡 Open API 미제공 → 수기 작성 몫. 매장명 식별 불가 시 전화번호로 대체.
+const csDaySummaryCache = new Map(); // key `${assignee}|${date}` → { at, data }
+const CS_DAY_TTL = 20 * 60 * 1000;
+
+// 상담 메시지들에서 고객 전화번호 추출(통화 객체 from/to, 방향 기준)
+function extractCustomerPhone(messages) {
+  for (const m of messages) {
+    const cl = m.meet?.call;
+    if (!cl) continue;
+    const num = cl.direction === "outbound" ? cl.to : cl.from;
+    if (num) return String(num);
+  }
+  return null;
+}
+
+// 담당자+날짜 → 그날 채널톡 상담 매장·내용 요약(핵심 로직, 캐시 없음). 엔드포인트·업무일지 공용.
+async function csDayStoreSummary(assignee, date) {
+  const { key, secret } = chKeys();
+  if (!key || !secret) return { assignee, date, count: 0, items: [], error: "채널톡 키 미설정" };
+  if (!process.env.ANTHROPIC_API_KEY) return { assignee, date, count: 0, items: [], error: "ANTHROPIC_API_KEY 미설정 — 요약 비활성" };
+
+  const [y, mo, d] = date.split("-").map(Number);
+  const start = new Date(y, mo - 1, d, 0, 0, 0, 0).getTime();
+  const end = start + 24 * 3600 * 1000;
+
+  // 담당자명 → 채널톡 매니저 id 집합
+  const managersRes = await chFetch("/managers", { limit: 500 });
+  const myIds = new Set();
+  for (const m of managersRes.managers ?? []) {
+    if (cleanManagerName(m.name) === assignee) myIds.add(m.id);
+  }
+  if (myIds.size === 0) return { assignee, date, count: 0, items: [], note: `채널톡에 '${assignee}' 상담원이 없습니다` };
+
+  // 그날 활동한 상담 중 이 담당자 배정분만
+  const chats = await chListUserChats("", start);
+  const mine = chats.filter((c) => {
+    const times = [c.createdAt, c.openedAt, c.updatedAt, c.closedAt].filter((t) => typeof t === "number");
+    return times.some((t) => t >= start && t < end) && c.assigneeId && myIds.has(c.assigneeId);
+  });
+
+  // 상담별 트랜스크립트 + 전화번호(상한 15건)
+  const picked = mine.slice(0, 15);
+  const convos = [];
+  for (const c of picked) {
+    try {
+      const mj = await chFetch(`/user-chats/${c.id}/messages`, { limit: 40, sortOrder: "asc" });
+      const msgs = mj.messages ?? [];
+      const lines = msgs
+        .filter((x) => x.plainText && x.plainText.trim())
+        .map((x) => {
+          const role = x.personType === "manager" ? "상담원" : x.personType === "bot" ? "봇" : "고객";
+          return `${role}: ${x.plainText.replace(/\s+/g, " ").trim()}`;
+        });
+      const phone = extractCustomerPhone(msgs);
+      if (!lines.length && !phone) continue;
+      convos.push({
+        name: c.name || null,
+        phone,
+        url: c.channelId ? `https://desk.channel.io/#/channels/${c.channelId}/user_chats/${c.id}` : null,
+        transcript: lines.join("\n").slice(0, 1100),
+      });
+    } catch {}
+  }
+
+  if (convos.length === 0) return { assignee, date, count: 0, items: [], note: `${date} ${assignee}님의 채널톡 상담 기록이 없습니다` };
+
+  const system =
+    "너는 CS 상담 기록을 정리하는 비서다. 각 상담 대화를 읽고 '어느 매장과 무슨 내용으로 상담했는지' 한국어로 간결히 요약한다. " +
+    "매장명은 대화 내용에서 찾아 쓰고, 매장을 특정할 수 없으면 store를 빈 문자열로 둔다(그 경우 전화번호로 대체 표시함). 데이터에 없는 내용은 지어내지 말 것. " +
+    "반드시 아래 JSON 배열만 출력(코드펜스·설명 금지). 순서·개수는 입력과 동일하게:\n" +
+    '[{"idx":0,"store":"매장명 또는 빈 문자열","summary":"무슨 내용으로 응대했는지 1~2문장"}]';
+  const user = convos
+    .map((c, i) => `#${i} 전화:${c.phone || "없음"} 고객명:${c.name || "없음"}\n${c.transcript || "(대화 없음)"}`)
+    .join("\n\n---\n\n");
+
+  let txt = await claudeText(system, user, 2000);
+  txt = txt.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  const parsed = JSON.parse(txt);
+  const byIdx = new Map((Array.isArray(parsed) ? parsed : []).map((p) => [Number(p.idx), p]));
+
+  const items = convos.map((c, i) => {
+    const p = byIdx.get(i) || {};
+    const store = String(p.store || "").trim();
+    return {
+      label: store || c.phone || c.name || "미상",
+      store: store || null,
+      phone: c.phone || null,
+      summary: String(p.summary || "").trim(),
+      url: c.url,
+    };
+  });
+
+  return { assignee, date, count: items.length, items };
+}
+
+app.get("/api/cs/day-summary", async (req, res) => {
+  try {
+    const assignee = String(req.query.assignee || "").trim();
+    const date = String(req.query.date || "").trim(); // YYYY-MM-DD
+    if (!assignee || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: "assignee, date(YYYY-MM-DD) 가 필요합니다" });
+
+    const cacheKey = `${assignee}|${date}`;
+    const force = req.query.force === "1";
+    const hit = csDaySummaryCache.get(cacheKey);
+    if (!force && hit && Date.now() - hit.at < CS_DAY_TTL)
+      return res.json({ ...hit.data, cached: true, generatedAt: new Date(hit.at).toISOString() });
+
+    const data = await csDayStoreSummary(assignee, date);
+    csDaySummaryCache.set(cacheKey, { at: Date.now(), data });
+    res.json({ ...data, cached: false, generatedAt: new Date().toISOString() });
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("JSON")) return res.status(502).json({ error: "요약 형식 오류 — 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
 // ===== 업무일지 (매일 18:00 자동 생성 + 수동) =====
 const WORKLOG_HOUR = 19; // 오후 7시
 
@@ -2176,6 +2300,14 @@ async function generateWorklog({ auto = false } = {}) {
     } catch (e) {
       console.warn("업무일지 CS 요약 실패(무시):", String(e?.message ?? e));
     }
+    // 오늘 채널톡 상담 '내용'(담당자별·매장별) — 별도 'CS 상담 내역' 섹션용. 실패해도 일지 생성 계속
+    let csStores = [];
+    try {
+      const per = await Promise.all(CS_AGENTS.map((name) => csDayStoreSummary(name, date).catch(() => null)));
+      csStores = per.filter((r) => r && r.count > 0).map((r) => ({ assignee: r.assignee, items: r.items }));
+    } catch (e) {
+      console.warn("업무일지 CS 상담내용 요약 실패(무시):", String(e?.message ?? e));
+    }
     // 브리핑 섹션 안정화: AI가 비워 보낸 항목은 데이터로 보완(특히 '내일')
     if (digest) {
       digest.threeLine = Array.isArray(digest.threeLine) ? digest.threeLine : [];
@@ -2192,7 +2324,8 @@ async function generateWorklog({ auto = false } = {}) {
       ...data,
       aiComment,
       digest, // 데일리 브리핑(세 줄 요약·오늘의 이야기·지켜볼것·내일)
-      cs, // 오늘 채널톡 CS 응대 요약
+      cs, // 오늘 채널톡 CS 응대 요약(건수 통계)
+      csStores, // 오늘 채널톡 상담 내용(담당자별·매장별) — 별도 섹션
       text: worklogToText(data),
       auto,
       note,

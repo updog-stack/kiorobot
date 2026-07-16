@@ -7,6 +7,9 @@ import {
   busyLevel,
   STATUS_ORDER,
   todayIso,
+  fetchCsDaySummary,
+  wantsCsSummary,
+  type CsDaySummaryResponse,
   type TaskRecord,
   type StaffLocations,
   type WorkLocation,
@@ -307,6 +310,9 @@ export function TaskStatusView() {
                                 {"\n"}
                                 {t.content?.trim() || "(작성된 업무내용이 없습니다)"}
                                 {t.url && (<>{"\n"}<a href={t.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>노션에서 열기 ↗</a></>)}
+                                {wantsCsSummary(t.content) && t.assignee && t.assignee !== "미지정" && (
+                                  <CsSummaryPanel assignee={t.assignee} date={t.taskDate || todayIso()} />
+                                )}
                               </td>
                             </tr>
                           )}
@@ -539,5 +545,66 @@ function TaskAiSummary({ tasks, todayOnly, onToggleToday, todayCount }: {
         </>
       )}
     </section>
+  );
+}
+
+// 업무내용에 '채널톡 참고' 표시가 있을 때, 담당자의 그날 채널톡 상담을 불러와 매장·내용 요약(영업폰은 수기)
+function CsSummaryPanel({ assignee, date }: { assignee: string; date: string }) {
+  const [data, setData] = useState<CsDaySummaryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load(force = false) {
+    setLoading(true);
+    setErr(null);
+    try {
+      setData(await fetchCsDaySummary(assignee, date, force));
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 12, padding: 12, background: "#fff", border: "1px solid #dbe2f1", borderRadius: 10, whiteSpace: "normal" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <b style={{ color: "#1e40af" }}>💬 채널톡 상담 요약</b>
+        <span className="muted" style={{ fontSize: 12 }}>{assignee} · {date} · 영업폰 인입은 수기 작성</span>
+        <button
+          onClick={() => load(!!data)}
+          disabled={loading}
+          style={{ marginLeft: "auto", cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "5px 11px", borderRadius: 8, border: "1px solid #4338ca", background: data ? "#fff" : "#4338ca", color: data ? "#4338ca" : "#fff" }}
+        >
+          {loading ? "불러오는 중…" : data ? "🔄 다시 요약" : "채널톡 상담 불러오기"}
+        </button>
+      </div>
+
+      {err && <div style={{ color: "#b91c1c", fontSize: 13, marginTop: 8 }}>{err}</div>}
+
+      {data && !loading && (
+        <div style={{ marginTop: 10 }}>
+          {data.error && <div style={{ color: "#b45309", fontSize: 13 }}>{data.error}</div>}
+          {!data.error && data.count === 0 && (
+            <div className="muted" style={{ fontSize: 13 }}>{data.note || "해당 날짜의 채널톡 상담 기록이 없습니다."}</div>
+          )}
+          {data.count > 0 && (
+            <>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>상담 {data.count}건{data.cached ? " · 캐시" : ""}</div>
+              <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+                {data.items.map((it, i) => (
+                  <li key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 13.5, lineHeight: 1.5 }}>
+                    <span style={{ flex: "0 0 auto", fontWeight: 700, color: it.store ? "#111827" : "#6b7280" }}>
+                      {it.url ? <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{it.label}</a> : it.label}
+                    </span>
+                    <span style={{ color: "#374151" }}>— {it.summary || "(요약 없음)"}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
