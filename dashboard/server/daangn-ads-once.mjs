@@ -1,34 +1,23 @@
 // 당근 광고 지표 1회 수집(서버용) — 이식된 storageState 로 로그인, DOM에서 지표 추출 후 종료.
 //   · 서버(리눅스)는 Xvfb 가상화면 위에서 headless:false 로 실행: xvfb-run -a node server/daangn-ads-once.mjs
 //   · 세션은 data/daangn-state.json (로컬에서 추출해 복사). 만료 시 로컬 재로그인→재추출→재복사.
-//   · 로컬 상주 데몬(daangn-ads-daemon.mjs)과 동일한 파싱. 저장/업로드도 동일(daangn-ads.json · /api/daangn-ads).
+//   · 파싱은 daangn-ads-daemon.mjs 것을 그대로 가져다 쓴다.
+//     예전엔 같은 정규식을 복사해 뒀는데, 데몬만 고치는 바람에 서버는 계속
+//     구버전으로 수집했다(검색광고 누락·소재 미수집). 파서를 두 벌로 두지 말 것.
 import "dotenv/config";
 import { chromium } from "playwright";
 import { writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { pushToServer } from "./lib/push-to-server.mjs";
+import { parseAds, parseCreativeDetail } from "./daangn-ads-daemon.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "data", "daangn-state.json");
 const OUT = join(__dirname, "data", "daangn-ads.json");
+const DBG = join(__dirname, "data", "_daangn-dom.txt");
 const ADVERTISER = process.env.DAANGN_ADVERTISER_ID || "3794527";
 const ADS = `https://ads-lite.business.daangn.com/advertisements/?advertiserId=${ADVERTISER}&advertiser_id=${ADVERTISER}`;
-const num = (s) => Number(String(s).replace(/[^0-9.]/g, "")) || 0;
-
-function parseAds(text) {
-  const cashM = text.match(/광고캐시\s*([\d,]+)\s*원/);
-  const cash = cashM ? num(cashM[1]) : null;
-  const ads = [];
-  const re = /(디스플레이|검색)\s*광고[중]?\s*(ON|OFF)?[\s\S]{0,60}?([^\n#]{2,40}?)\s*#\d+[\s\S]*?하루예산\s*([\d,]+)\s*원[\s\S]*?노출수\s*([\d,]+)[\s\S]*?클릭수\s*([\d,]+)[\s\S]*?지출\s*([\d,]+)\s*원[\s\S]*?클릭률\s*([\d.]+)\s*%/g;
-  let m;
-  while ((m = re.exec(text)) && ads.length < 30) {
-    ads.push({ type: m[1], status: m[2] || "", name: m[3].trim(), dailyBudget: num(m[4]), impressions: num(m[5]), clicks: num(m[6]), spend: num(m[7]), ctr: Number(m[8]) });
-  }
-  const tot = ads.reduce((a, x) => ({ impressions: a.impressions + x.impressions, clicks: a.clicks + x.clicks, spend: a.spend + x.spend }), { impressions: 0, clicks: 0, spend: 0 });
-  const periodM = text.match(/(최근 7일|어제|오늘)\s*성과/);
-  return { cash, period: periodM ? periodM[1] : "최근 7일", ads, total: { ...tot, ctr: tot.impressions ? +(tot.clicks / tot.impressions * 100).toFixed(2) : 0 } };
-}
 
 async function main() {
   if (!existsSync(STATE)) { console.error("❌ daangn-state.json 없음 — 로컬에서 세션 추출 후 복사 필요"); process.exit(1); }
@@ -46,11 +35,28 @@ async function main() {
       return;
     }
     const text = await page.evaluate(() => document.body.innerText);
+    writeFileSync(DBG, text);
     const data = parseAds(text.replace(/\s+/g, " "));
+
+    // 소재별 노출·클릭·지출은 그룹 상세에만 있다. 목록의 그룹 링크가 곧 상세 주소.
+    const groupLinks = await page.$$eval("a[href*='/ad-groups/']", (as) => [...new Set(as.map((a) => a.href))]);
+    for (let i = 0; i < data.ads.length && i < groupLinks.length; i++) {
+      try {
+        await page.goto(groupLinks[i], { waitUntil: "networkidle", timeout: 45000 });
+        await page.waitForTimeout(3500);
+        const dt = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, " ");
+        const detailed = parseCreativeDetail(dt);
+        if (detailed.length) data.ads[i].creatives = detailed;
+      } catch (e) {
+        console.log(`  상세 수집 실패(${data.ads[i].name}): ${e.message}`);
+      }
+    }
+
     const payload = { updatedAt: new Date().toISOString(), advertiserId: ADVERTISER, ...data };
     writeFileSync(OUT, JSON.stringify(payload, null, 2));
     await pushToServer("/api/daangn-ads", payload);
-    console.log(`✅ 당근: 광고 ${data.ads.length}건 · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
+    const nCreatives = data.ads.reduce((n, a) => n + (a.creatives?.length || 0), 0);
+    console.log(`✅ 당근: 광고 ${data.ads.length}건(소재 ${nCreatives}개) · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
   } catch (e) {
     console.error("❌", e.message);
   } finally {
