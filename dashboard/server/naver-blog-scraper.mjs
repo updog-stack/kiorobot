@@ -58,6 +58,15 @@ async function collectBlog(blog) {
     const cv = seriesOf(cap.cv, "cv"); // 조회수
     const uv = seriesOf(cap.uv, "uv"); // 순방문자(있으면)
     if (!cv) return { blogId: blog.id, label: blog.label, error: "조회수(cv) 데이터를 못 받음" };
+
+    // 여기까지 왔으면 세션이 살아 있다. 네이버가 갱신해준 쿠키를 파일에 다시
+    // 써두면 다음 수집이 그걸 쓴다 → 수집이 도는 한 세션이 스스로 연장된다.
+    // (storageState 모드에서만. 로컬 프로필 모드는 브라우저가 알아서 유지한다)
+    if (useState) {
+      try { await ctx.storageState({ path: blog.state }); }
+      catch (e) { console.log(`  세션 재저장 실패(${blog.label}) — 수집 자체는 정상:`, e.message); }
+    }
+
     return {
       blogId: blog.id,
       label: blog.label,

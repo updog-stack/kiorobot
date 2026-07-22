@@ -52,6 +52,15 @@ async function main() {
       }
     }
 
+    // 수집이 성공했다는 건 세션이 살아 있다는 뜻. 사이트가 갱신해준 쿠키를
+    // 파일에 다시 써두면 다음 수집이 그걸 쓴다 → 수집이 도는 한 세션이 연장된다.
+    // (안 하면 이식 당시 만료일 그대로 늙어서 언젠가 끊긴다)
+    try {
+      await ctx.storageState({ path: STATE });
+    } catch (e) {
+      console.log("  세션 재저장 실패(수집 자체는 정상):", e.message);
+    }
+
     const payload = { updatedAt: new Date().toISOString(), advertiserId: ADVERTISER, ...data };
     writeFileSync(OUT, JSON.stringify(payload, null, 2));
     await pushToServer("/api/daangn-ads", payload);
