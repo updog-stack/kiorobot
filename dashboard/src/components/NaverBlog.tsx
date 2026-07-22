@@ -19,11 +19,11 @@ function niceScale(dataMax: number, ticks = 4): { max: number; step: number } {
   return { max: step * ticks, step };
 }
 
-// 블로그마다 로그인 세션이 달라 재로그인 안내도 블로그별로 달라진다.
+// 서버는 로컬에서 이식한 세션으로 수집한다. 만료되면 로컬에서 재로그인 → 세션 재업로드.
 function loginHint(index: number): string {
-  return index === 0
-    ? "네이버블로그로그인.bat 실행해 재로그인 후 다시 수집됩니다."
-    : `node server/naver-blog-login.mjs ${index + 1} 실행해 재로그인 후 다시 수집됩니다.`;
+  const relogin =
+    index === 0 ? "네이버블로그로그인.bat" : `node server/naver-blog-login.mjs ${index + 1}`;
+  return `로컬 PC에서 ${relogin} 로 재로그인한 뒤 세션갱신.bat 을 실행해 주세요.`;
 }
 
 function BlogCard({ blog, updatedAt, index }: { blog: BlogStat; updatedAt: string | null; index: number }) {
@@ -84,7 +84,7 @@ function BlogCard({ blog, updatedAt, index }: { blog: BlogStat; updatedAt: strin
               </div>
             </div>
           </div>
-          <p className="dga__foot">최근 14일 일별 조회수 · 세션 재사용 수집(창 뜸)</p>
+          <p className="dga__foot">최근 14일 일별 조회수 · 서버 자동 수집(09시·18시)</p>
         </>
       )}
     </div>

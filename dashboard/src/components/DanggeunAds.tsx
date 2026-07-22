@@ -34,7 +34,7 @@ export function DanggeunAds() {
         <div className="dga__placeholder">
           ⚠️ {d.error || "세션 만료 — 재로그인 필요"}
           <br />
-          <span style={{ fontSize: 12 }}>당근 수집 데몬 창에서 다시 로그인해 주세요.</span>
+          <span style={{ fontSize: 12 }}>로컬 PC에서 세션갱신.bat 을 실행해 세션을 다시 올려주세요.</span>
         </div>
       ) : d.note ? (
         <div className="dga__placeholder">{d.note}</div>
@@ -97,7 +97,7 @@ export function DanggeunAds() {
               </div>
             ))}
           </div>
-          <p className="dga__foot">상주 수집(30분 주기) · 로그인 세션 유지 필요</p>
+          <p className="dga__foot">서버 자동 수집(09~21시 매시) · 세션 만료 시 세션갱신.bat 실행</p>
         </>
       )}
     </div>
