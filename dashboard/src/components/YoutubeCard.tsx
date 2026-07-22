@@ -17,6 +17,14 @@ export function YoutubeCard() {
   const [data, setData] = useState<YoutubeStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // 유튜브는 수집기가 없고 BFF가 API를 직접 조회한다(10분 캐시).
+  // 예전엔 화면 진입 때 한 번만 불러서, 대시보드를 켜둔 채로는 영영 갱신되지 않았다.
+  // 1시간마다 다시 불러 블로그·당근과 같은 주기로 맞춘다.
+  useEffect(() => {
+    const t = setInterval(() => { fetchYoutube().then(setData).catch(() => {}); }, 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
   useEffect(() => {
     fetchYoutube()
       .then(setData)
@@ -130,7 +138,7 @@ export function YoutubeCard() {
             </div>
           )}
           <p className="muted" style={{ fontSize: 11, marginTop: 12 }}>
-            10분마다 갱신 · {new Date(data.updatedAt).toLocaleString("ko-KR")} 기준
+            1시간마다 자동 갱신 · {new Date(data.updatedAt).toLocaleString("ko-KR")} 기준
           </p>
         </>
       )}
