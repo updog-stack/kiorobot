@@ -65,6 +65,18 @@ export function DanggeunAds() {
                   <div><span>지출</span><b>{wonF(a.spend)}</b></div>
                   <div><span>하루예산</span><b>{wonF(a.dailyBudget)}</b></div>
                 </div>
+                {/* 그룹 안의 개별 광고(소재) — 목록 페이지엔 클릭률만 제공됨 */}
+                {!!a.creatives?.length && (
+                  <ul className="dga__creatives">
+                    {a.creatives.map((c, j) => (
+                      <li className="dga__creative" key={j}>
+                        <span className={`dga__dot dga__dot--${c.status === "ON" ? "on" : "off"}`} />
+                        <span className="dga__creative-name">{c.name}</span>
+                        <span className="dga__creative-ctr">{c.ctr === null ? "—" : `${c.ctr.toFixed(2)}%`}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             ))}
           </div>

@@ -5,7 +5,7 @@
 import "dotenv/config";
 import { chromium } from "playwright";
 import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { pushToServer, serverFetch } from "./lib/push-to-server.mjs";
@@ -19,19 +19,68 @@ const ADS = `https://ads-lite.business.daangn.com/advertisements/?advertiserId=$
 const REFRESH_MS = 30 * 60 * 1000; // 30분
 const num = (s) => Number(String(s).replace(/[^0-9.]/g, "")) || 0;
 
+const ctrOf = (clicks, impressions) => (impressions ? +((clicks / impressions) * 100).toFixed(2) : 0);
+
+// 그룹 블록 안의 소재(개별 광고) 목록.
+//   "전체 N ⸱ 광고중 M" 뒤부터 "이 그룹에 광고 추가" 전까지가 소재 영역.
+//   목록 페이지에는 소재별로 클릭률만 나온다(노출·클릭·지출은 그룹 상세에만 있음).
+function parseCreatives(block) {
+  const zone = block.match(/전체\s*\d+[^\d]*?광고중\s*\d+\s*(.*?)(?:이 그룹에 광고 추가|그룹 상세|$)/);
+  if (!zone) return [];
+  const out = [];
+  const re = /(.+?)\s*광고(중|꺼짐)(?:[^\d%]*클릭률\s*([\d.]+)\s*%)?/g;
+  let m;
+  while ((m = re.exec(zone[1])) && out.length < 30) {
+    const name = m[1].replace(/[⸱·・]/g, "").trim();
+    if (!name) continue;
+    out.push({
+      name,
+      status: m[2] === "중" ? "ON" : "OFF",
+      ctr: m[3] === undefined ? null : Number(m[3]),
+    });
+  }
+  return out;
+}
+
 function parseAds(text) {
   const cashM = text.match(/광고캐시\s*([\d,]+)\s*원/);
   const cash = cashM ? num(cashM[1]) : null;
-  const ads = [];
-  // 광고 블록: 유형 → ... → 노출수 → 클릭수 → 지출 → (그룹명) → 클릭률
-  const re = /(디스플레이|검색)\s*광고[중]?\s*(ON|OFF)?[\s\S]{0,60}?([^\n#]{2,40}?)\s*#\d+[\s\S]*?하루예산\s*([\d,]+)\s*원[\s\S]*?노출수\s*([\d,]+)[\s\S]*?클릭수\s*([\d,]+)[\s\S]*?지출\s*([\d,]+)\s*원[\s\S]*?클릭률\s*([\d.]+)\s*%/g;
-  let m;
-  while ((m = re.exec(text)) && ads.length < 30) {
-    ads.push({ type: m[1], status: m[2] || "", name: m[3].trim(), dailyBudget: num(m[4]), impressions: num(m[5]), clicks: num(m[6]), spend: num(m[7]), ctr: Number(m[8]) });
+
+  // 1) 광고 그룹의 시작 지점을 모두 찾는다. (유형 + 상태 + 그룹명#N)
+  const head = /(디스플레이|검색)\s*광고(?:중|꺼짐)\s*(ON|OFF)\s*([^#]{2,40}?)\s*#\d+/g;
+  const heads = [];
+  let h;
+  while ((h = head.exec(text)) && heads.length < 30) {
+    heads.push({ type: h[1], status: h[2], name: h[3].trim(), at: h.index, end: head.lastIndex });
   }
-  const tot = ads.reduce((a, x) => ({ impressions: a.impressions + x.impressions, clicks: a.clicks + x.clicks, spend: a.spend + x.spend }), { impressions: 0, clicks: 0, spend: 0 });
+
+  // 2) 그룹마다 다음 그룹 직전까지를 한 덩어리로 잘라 개별 파싱한다.
+  //    한 정규식으로 전부 훑으면, 값이 빠진 그룹(예: 노출 0이라 클릭률 줄이 없음)에서
+  //    다음 그룹 숫자를 끌어와 매칭되거나 아예 통째로 누락된다.
+  const ads = heads.map((g, i) => {
+    const block = text.slice(g.end, i + 1 < heads.length ? heads[i + 1].at : text.length);
+    const pick = (re) => { const m = block.match(re); return m ? num(m[1]) : 0; };
+    const impressions = pick(/노출수\s*([\d,]+)/);
+    const clicks = pick(/클릭수\s*([\d,]+)/);
+    return {
+      type: g.type,
+      status: g.status,
+      name: g.name,
+      dailyBudget: pick(/하루예산\s*([\d,]+)\s*원/),
+      impressions,
+      clicks,
+      spend: pick(/지출\s*([\d,]+)\s*원/),
+      ctr: ctrOf(clicks, impressions), // 소재 클릭률을 갖다 쓰지 않고 직접 계산
+      creatives: parseCreatives(block),
+    };
+  });
+
+  const tot = ads.reduce(
+    (a, x) => ({ impressions: a.impressions + x.impressions, clicks: a.clicks + x.clicks, spend: a.spend + x.spend }),
+    { impressions: 0, clicks: 0, spend: 0 }
+  );
   const periodM = text.match(/(최근 7일|어제|오늘)\s*성과/);
-  return { cash, period: periodM ? periodM[1] : "최근 7일", ads, total: { ...tot, ctr: tot.impressions ? +(tot.clicks / tot.impressions * 100).toFixed(2) : 0 } };
+  return { cash, period: periodM ? periodM[1] : "최근 7일", ads, total: { ...tot, ctr: ctrOf(tot.clicks, tot.impressions) } };
 }
 
 async function main() {
@@ -112,4 +161,9 @@ function runNaverOnce() {
   } catch (e) { console.log("네이버 실행 오류:", e.message); }
 }
 
-main().catch((e) => { console.error("❌", e.message); process.exit(1); });
+// 파서만 따로 테스트할 수 있도록 내보낸다(직접 실행할 때만 데몬이 뜬다).
+export { parseAds, parseCreatives };
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error("❌", e.message); process.exit(1); });
+}

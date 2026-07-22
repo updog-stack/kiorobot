@@ -861,6 +861,45 @@
   font-size: 16px;
   font-weight: 700;
 }
+/* 그룹 안의 개별 광고(소재) 목록 */
+.dga__creatives {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px dashed var(--border, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dga__creative {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dga__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+.dga__dot--on {
+  background: #16a34a;
+}
+.dga__dot--off {
+  background: #cbd5e1;
+}
+.dga__creative-name {
+  color: var(--muted, #64748b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dga__creative-ctr {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .dga__foot {
   margin-top: 14px;
   font-size: 11px;
