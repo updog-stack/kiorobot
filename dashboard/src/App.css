@@ -861,21 +861,42 @@
   font-size: 16px;
   font-weight: 700;
 }
-/* 그룹 안의 개별 광고(소재) 목록 */
+/* 그룹 합계 — 개별 광고가 주인공이므로 요약은 한 줄로 */
+.dga__group-sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+.dga__group-sum b {
+  font-weight: 600;
+  color: var(--text, #334155);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 그룹 안의 개별 광고 목록 */
 .dga__creatives {
   list-style: none;
   margin: 12px 0 0;
-  padding: 10px 0 0;
+  padding: 12px 0 0;
   border-top: 1px dashed var(--border, #e2e8f0);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 .dga__creative {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border, #e2e8f0);
+}
+.dga__creative-top {
+  display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
 }
 .dga__dot {
   width: 6px;
@@ -890,15 +911,17 @@
   background: #cbd5e1;
 }
 .dga__creative-name {
-  color: var(--muted, #64748b);
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dga__creative-ctr {
-  margin-left: auto;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+.dga__creative .dga__ad-nums {
+  gap: 14px;
+}
+.dga__creative .dga__ad-nums b {
+  font-size: 14px;
 }
 .dga__foot {
   margin-top: 14px;

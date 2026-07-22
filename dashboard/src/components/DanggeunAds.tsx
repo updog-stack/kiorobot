@@ -58,21 +58,38 @@ export function DanggeunAds() {
                   <span className="dga__ad-name">{a.name}</span>
                   <span className={`dga__status dga__status--${a.status === "ON" ? "on" : "off"}`}>{a.status}</span>
                 </div>
-                <div className="dga__ad-nums">
-                  <div><span>노출</span><b>{a.impressions.toLocaleString("ko-KR")}</b></div>
-                  <div><span>클릭</span><b>{a.clicks.toLocaleString("ko-KR")}</b></div>
-                  <div><span>CTR</span><b>{a.ctr.toFixed(2)}%</b></div>
-                  <div><span>지출</span><b>{wonF(a.spend)}</b></div>
-                  <div><span>하루예산</span><b>{wonF(a.dailyBudget)}</b></div>
+                {/* 그룹 합계 — 개별 광고는 아래에 따로 나오므로 요약 줄로만 */}
+                <div className="dga__group-sum">
+                  <span>그룹 합계</span>
+                  <b>노출 {a.impressions.toLocaleString("ko-KR")}</b>
+                  <b>클릭 {a.clicks.toLocaleString("ko-KR")}</b>
+                  <b>CTR {a.ctr.toFixed(2)}%</b>
+                  <b>지출 {wonF(a.spend)}</b>
+                  <b>하루예산 {wonF(a.dailyBudget)}</b>
                 </div>
-                {/* 그룹 안의 개별 광고(소재) — 목록 페이지엔 클릭률만 제공됨 */}
+
+                {/* 그룹 안의 개별 광고 — 각각의 지표를 그대로 표시 */}
                 {!!a.creatives?.length && (
                   <ul className="dga__creatives">
                     {a.creatives.map((c, j) => (
                       <li className="dga__creative" key={j}>
-                        <span className={`dga__dot dga__dot--${c.status === "ON" ? "on" : "off"}`} />
-                        <span className="dga__creative-name">{c.name}</span>
-                        <span className="dga__creative-ctr">{c.ctr === null ? "—" : `${c.ctr.toFixed(2)}%`}</span>
+                        <div className="dga__creative-top">
+                          <span className={`dga__dot dga__dot--${c.status === "ON" ? "on" : "off"}`} />
+                          <span className="dga__creative-name">{c.name}</span>
+                          <span className={`dga__status dga__status--${c.status === "ON" ? "on" : "off"}`}>{c.status}</span>
+                        </div>
+                        {c.impressions === undefined ? (
+                          <div className="dga__ad-nums">
+                            <div><span>CTR</span><b>{c.ctr === null ? "—" : `${c.ctr.toFixed(2)}%`}</b></div>
+                          </div>
+                        ) : (
+                          <div className="dga__ad-nums">
+                            <div><span>노출</span><b>{c.impressions.toLocaleString("ko-KR")}</b></div>
+                            <div><span>클릭</span><b>{(c.clicks ?? 0).toLocaleString("ko-KR")}</b></div>
+                            <div><span>CTR</span><b>{c.ctr === null ? "—" : `${c.ctr.toFixed(2)}%`}</b></div>
+                            <div><span>지출</span><b>{wonF(c.spend ?? 0)}</b></div>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>

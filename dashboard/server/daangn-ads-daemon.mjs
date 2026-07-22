@@ -42,6 +42,37 @@ function parseCreatives(block) {
   return out;
 }
 
+// 그룹 상세 페이지의 소재 목록 — 여기엔 노출·클릭·클릭률·지출이 다 있다.
+//   "광고중 {소재명} {게재위치} 노출수 N 클릭수 N 클릭률 N% 지출 N원 ON"
+//   클릭률은 노출이 0이면 빠질 수 있으므로 선택적으로 두고 직접 계산한다.
+// 소재명 뒤에 붙는 게재위치 라벨. "비즈프로필 소식"처럼 두 단어인 것도 있다.
+const PLACEMENTS =
+  /\s+(웹사이트|비즈프로필(?:\s*소식)?|소식|당근채팅|채팅|전화(?:\s*걸기)?|앱\s*설치|외부\s*링크|피드|당근마켓|가게\s*홍보)$/;
+
+function parseCreativeDetail(text) {
+  const out = [];
+  // 이름 부분에 머리말 토큰(광고중/성과/노출수…)이 끼면 안 된다.
+  // 그냥 (.+?) 로 두면 페이지 상단 그룹 상태의 "광고중"에 먼저 걸려
+  // 헤더 전체가 소재명으로 딸려온다.
+  const re =
+    /광고(중|꺼짐)\s+((?:(?!광고중|광고꺼짐|노출수|성과|광고 목록).){2,80}?)\s*노출수\s*([\d,]+)\s*클릭수\s*([\d,]+)\s*(?:클릭률\s*([\d.]+)\s*%\s*)?지출\s*([\d,]+)\s*원/g;
+  let m;
+  while ((m = re.exec(text)) && out.length < 30) {
+    const impressions = num(m[3]);
+    const clicks = num(m[4]);
+    out.push({
+      name: m[2].replace(PLACEMENTS, "").trim(),
+      status: m[1] === "중" ? "ON" : "OFF",
+      impressions,
+      clicks,
+      spend: num(m[6]),
+      // 당근이 표시하는 클릭률을 그대로 쓰고(화면과 일치), 없으면 계산
+      ctr: m[5] === undefined ? ctrOf(clicks, impressions) : Number(m[5]),
+    });
+  }
+  return out;
+}
+
 function parseAds(text) {
   const cashM = text.match(/광고캐시\s*([\d,]+)\s*원/);
   const cash = cashM ? num(cashM[1]) : null;
@@ -115,6 +146,22 @@ async function main() {
       const text = await page.evaluate(() => document.body.innerText);
       writeFileSync(DBG, text);
       const data = parseAds(text.replace(/\s+/g, " "));
+
+      // 목록 페이지에는 소재별 클릭률만 있다. 노출·클릭·지출까지 받으려면
+      // 그룹 상세로 들어가야 한다. 목록의 그룹 링크(/ad-groups/...)가 상세 주소다.
+      const groupLinks = await page.$$eval("a[href*='/ad-groups/']", (as) => [...new Set(as.map((a) => a.href))]);
+      for (let i = 0; i < data.ads.length && i < groupLinks.length; i++) {
+        try {
+          await page.goto(groupLinks[i], { waitUntil: "networkidle", timeout: 45000 });
+          await page.waitForTimeout(3500);
+          const dt = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, " ");
+          const detailed = parseCreativeDetail(dt);
+          if (detailed.length) data.ads[i].creatives = detailed;
+        } catch (e) {
+          console.log(`  상세 수집 실패(${data.ads[i].name}):`, e.message);
+        }
+      }
+
       const payload = { updatedAt: new Date().toISOString(), advertiserId: ADVERTISER, ...data };
       writeFileSync(OUT, JSON.stringify(payload, null, 2));
       console.log(`[${new Date().toLocaleTimeString()}] 수집: 광고 ${data.ads.length}건 · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
@@ -162,7 +209,7 @@ function runNaverOnce() {
 }
 
 // 파서만 따로 테스트할 수 있도록 내보낸다(직접 실행할 때만 데몬이 뜬다).
-export { parseAds, parseCreatives };
+export { parseAds, parseCreatives, parseCreativeDetail };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error("❌", e.message); process.exit(1); });
