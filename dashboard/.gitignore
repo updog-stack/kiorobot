@@ -37,10 +37,12 @@ server/data/cs-report/
 *.sw?
 
 # 브라우저 로그인 세션 프로필(당근·네이버 쿠키) — 절대 커밋 금지
-server/data/*-profile/
+# 블로그가 늘면 naver-profile-2, -3 … 이 생기므로 뒤에도 와일드카드를 둔다.
+server/data/*-profile*/
 server/data/daangn-profile/
 server/data/naver-profile/
 
 # 로컬 자동수집 런처(로컬 경로 하드코딩) — 각 PC 로컬 전용
 auto-*.vbs
 auto-*.cmd
+.report/
