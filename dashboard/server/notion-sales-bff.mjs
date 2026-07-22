@@ -3005,6 +3005,75 @@ function scheduleMarketingRefresh() {
   setInterval(refreshStaleMarketing, MARKETING_CHECK_MS);
 }
 
+// ── 마케팅 세션 만료 알림(슬랙 DM) ────────────────────────────────
+// 서버는 로컬에서 이식한 로그인 세션(storageState)으로 수집한다. 이건 자동 갱신이
+// 안 되므로(특히 당근은 고정 만료), 끊기기 전에 미리 알려줘야 한다.
+//   갱신 방법: 로컬 PC에서 dashboard/세션갱신.bat 실행
+const SESSION_TARGETS = [
+  { label: "네이버 블로그(다인아이앤씨)", file: "naver-state.json", authRe: /^NID_(AUT|SES)$/ },
+  { label: "네이버 블로그(키오로봇)", file: "naver-state-2.json", authRe: /^NID_(AUT|SES)$/ },
+  { label: "당근 광고", file: "daangn-state.json", authRe: /^_session$/ },
+];
+const SESSION_ALERT_STATE = join(__dirname, "data", "_session-alert.json");
+const SESSION_ALERT_BOT = "마케팅수집_세션";
+// 남은 일수가 이 단계로 '처음' 내려갈 때만 보낸다(매일 같은 내용으로 도배하지 않도록).
+// 반드시 오름차순 — 내림차순이면 3일에도 '7일 단계'가 잡혀 단계가 안 내려간다.
+const SESSION_STEPS = [0, 1, 3, 7];
+const stepOf = (days) => SESSION_STEPS.find((d) => days <= d) ?? null;
+
+// storageState 파일에서 인증 쿠키의 가장 이른 만료를 읽어 남은 일수를 구한다.
+async function sessionDaysLeft(t) {
+  const j = await readJson(join(__dirname, "data", t.file));
+  const exp = (j?.cookies ?? []).filter((c) => t.authRe.test(c.name) && c.expires > 0).map((c) => c.expires);
+  if (!exp.length) return null; // 파일이 없거나 인증 쿠키가 없음
+  return { days: Math.floor((Math.min(...exp) * 1000 - Date.now()) / 86400000), at: new Date(Math.min(...exp) * 1000) };
+}
+
+async function checkSessionExpiry() {
+  const to = process.env.SESSION_ALERT_SLACK || process.env.AMUDO_ALERT_SLACK;
+  if (!to) return;
+  const seen = (await readJson(SESSION_ALERT_STATE)) ?? {};
+  const lines = [];
+  for (const t of SESSION_TARGETS) {
+    const r = await sessionDaysLeft(t);
+    if (!r) continue;
+    const step = stepOf(r.days);
+    if (step === null) { delete seen[t.file]; continue; } // 여유 있음 → 다음에 다시 알릴 수 있게 초기화
+    if (seen[t.file] !== undefined && seen[t.file] <= step) continue; // 이미 같거나 더 급한 단계로 알림
+    seen[t.file] = step;
+    lines.push(
+      r.days <= 0
+        ? `· ${t.label} — *만료됨* (${r.at.toLocaleDateString("ko-KR")})`
+        : `· ${t.label} — *${r.days}일 남음* (${r.at.toLocaleDateString("ko-KR")})`
+    );
+  }
+  if (!lines.length) return;
+  const text = [
+    "⚠️ 마케팅 수집 세션 만료가 다가옵니다",
+    "",
+    ...lines,
+    "",
+    "로컬 PC에서 `dashboard\\세션갱신.bat` 을 실행해 주세요.",
+    "만료되면 블로그·당근 수집이 멈춥니다.",
+  ].join("\n");
+  try {
+    await slackDmText(to, text, SESSION_ALERT_BOT);
+    await writeFile(SESSION_ALERT_STATE, JSON.stringify(seen, null, 2));
+    console.log("[세션 만료 알림] DM 발송:", lines.length, "건");
+  } catch (e) {
+    console.error("[세션 만료 알림] 발송 실패:", e.message);
+  }
+}
+
+function scheduleSessionExpiryAlert() {
+  if (!(process.env.SESSION_ALERT_SLACK || process.env.AMUDO_ALERT_SLACK)) {
+    console.log("ℹ️ SESSION_ALERT_SLACK/AMUDO_ALERT_SLACK 미설정 — 세션 만료 알림 비활성");
+    return;
+  }
+  setTimeout(checkSessionExpiry, 2 * 60 * 1000); // 기동 2분 뒤 1회
+  setInterval(checkSessionExpiry, 6 * 60 * 60 * 1000); // 6시간마다
+}
+
 app.post("/api/collect", (req, res) => {
   const scope = req.body?.scope;
   // 마케팅(당근·네이버): 로컬이든 서버든 그 자리에서 바로 수집한다.
@@ -3411,6 +3480,8 @@ app.listen(Number(BFF_PORT), () => {
   scheduleDailyCollect();
   // 마케팅(블로그·당근): 마지막 수집이 1시간 넘게 묵으면 자동 재수집(5분마다 점검)
   scheduleMarketingRefresh();
+  // 수집용 로그인 세션 만료 임박 → 슬랙 DM (7·3·1일 남았을 때, 만료 시)
+  scheduleSessionExpiryAlert();
   // 아무도없개 새 상담 → 슬랙 DM 알림(3분 폴링)
   scheduleAmudoAlerts();
 });
