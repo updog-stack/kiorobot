@@ -25,6 +25,7 @@ import express from "express";
 import { Client } from "@notionhq/client";
 import { createAuth, parseCookies, buildCookie, COOKIE_NAME } from "./lib/auth.mjs";
 import { buildWorklogData, generateAiComment, generateDigest, generateMonthlyDigest, worklogToText, buildWorklogHtml } from "./lib/worklog.mjs";
+import { mergeCash } from "./lib/daangn-cash.mjs";
 import { chromium } from "playwright";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -456,10 +457,28 @@ app.get("/api/naver-blog", async (_req, res) => {
   }
 });
 
+// 당근마켓 광고캐시 내역(/finances) — daangn 수집기가 광고와 같은 세션에서 함께 수집.
+//   저장은 '거래 id 기준 누적'(mergeCash): 매 수집이 최소 이번 달을 담고, 과거 달은 보존된다.
+const DAANGN_CASH_JSON = join(__dirname, "data", "daangn-cash.json");
+app.get("/api/daangn-cash", async (_req, res) => {
+  try {
+    res.json((await readJson(DAANGN_CASH_JSON)) ?? { note: "당근 캐시 내역 수집 미시작 — 마케팅 데이터 동기화 필요" });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
 // 로컬 수집분(당근·블로그) 서버 업로드 — 로컬 PC 수집기가 결과를 서버로 올림(인증 게이트 통과)
 app.post("/api/daangn-ads", async (req, res) => {
   try { await writeFile(DAANGN_JSON, JSON.stringify(req.body ?? {}, null, 2)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+app.post("/api/daangn-cash", async (req, res) => {
+  try {
+    const merged = mergeCash(await readJson(DAANGN_CASH_JSON), req.body ?? {});
+    await writeFile(DAANGN_CASH_JSON, JSON.stringify(merged, null, 2));
+    res.json({ ok: true, count: merged.transactions.length });
+  } catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
 });
 app.post("/api/naver-blog", async (req, res) => {
   try { await writeFile(NAVER_BLOG_JSON, JSON.stringify(req.body ?? {}, null, 2)); res.json({ ok: true }); }

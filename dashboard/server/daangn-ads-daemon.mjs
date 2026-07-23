@@ -9,10 +9,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { pushToServer, serverFetch } from "./lib/push-to-server.mjs";
+import { saveCash } from "./lib/daangn-cash.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(__dirname, "data", "daangn-profile");
 const OUT = join(__dirname, "data", "daangn-ads.json");
+const CASH_OUT = join(__dirname, "data", "daangn-cash.json");
 const DBG = join(__dirname, "data", "_daangn-dom.txt");
 const ADVERTISER = process.env.DAANGN_ADVERTISER_ID || "3794527";
 const ADS = `https://ads-lite.business.daangn.com/advertisements/?advertiserId=${ADVERTISER}&advertiser_id=${ADVERTISER}`;
@@ -166,6 +168,8 @@ async function main() {
       writeFileSync(OUT, JSON.stringify(payload, null, 2));
       console.log(`[${new Date().toLocaleTimeString()}] 수집: 광고 ${data.ads.length}건 · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
       await pushToServer("/api/daangn-ads", payload);
+      // 광고캐시 내역(/finances)도 같은 세션에서 이어서 수집(베스트에포트).
+      await saveCash(page, ADVERTISER, CASH_OUT);
       await winState("minimized"); // 수집 후 다시 최소화
     } catch (e) { console.log("수집 오류:", e.message); }
   }

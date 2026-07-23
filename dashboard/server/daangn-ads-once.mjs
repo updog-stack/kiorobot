@@ -11,10 +11,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { pushToServer } from "./lib/push-to-server.mjs";
 import { parseAds, parseCreativeDetail } from "./daangn-ads-daemon.mjs";
+import { saveCash } from "./lib/daangn-cash.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, "data", "daangn-state.json");
 const OUT = join(__dirname, "data", "daangn-ads.json");
+const CASH_OUT = join(__dirname, "data", "daangn-cash.json");
 const DBG = join(__dirname, "data", "_daangn-dom.txt");
 const ADVERTISER = process.env.DAANGN_ADVERTISER_ID || "3794527";
 const ADS = `https://ads-lite.business.daangn.com/advertisements/?advertiserId=${ADVERTISER}&advertiser_id=${ADVERTISER}`;
@@ -66,6 +68,9 @@ async function main() {
     await pushToServer("/api/daangn-ads", payload);
     const nCreatives = data.ads.reduce((n, a) => n + (a.creatives?.length || 0), 0);
     console.log(`✅ 당근: 광고 ${data.ads.length}건(소재 ${nCreatives}개) · 캐시 ${data.cash?.toLocaleString()}원 · 노출 ${data.total.impressions} 클릭 ${data.total.clicks} 지출 ${data.total.spend}`);
+
+    // 광고캐시 내역(/finances)도 같은 세션에서 이어서 수집(베스트에포트). 실패해도 광고 수집엔 영향 없음.
+    await saveCash(page, ADVERTISER, CASH_OUT);
   } catch (e) {
     console.error("❌", e.message);
   } finally {

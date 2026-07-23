@@ -929,6 +929,65 @@
   color: var(--muted, #94a3b8);
 }
 
+/* ===== 마케팅: 당근 캐시 사용 내역 (월별·주별·거래내역 표) ===== */
+.dgc__section {
+  margin-top: 22px;
+}
+.dgc__title {
+  font-size: 15px;
+  font-weight: 800;
+  margin: 0 0 10px;
+}
+.dgc__hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #94a3b8);
+}
+.dgc__scroll {
+  overflow-x: auto;
+}
+.dgc__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 460px;
+}
+.dgc__table th,
+.dgc__table td {
+  padding: 9px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.dgc__table thead th {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted, #64748b);
+  background: var(--bg, #f8fafc);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  position: sticky;
+  top: 0;
+}
+.dgc__table tbody tr:hover {
+  background: var(--bg, #f8fafc);
+}
+.dgc__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dgc__strong {
+  font-weight: 800;
+}
+.dgc__muted {
+  color: var(--muted, #94a3b8);
+}
+.dgc__pos {
+  color: #2563eb; /* 충전(+) 파랑 */
+}
+.dgc__neg {
+  color: #ea580c; /* 사용(-) 주황 */
+}
+
 /* 블로그 일별 조회수 차트 (좌측 수치 눈금 + 가로 격자선) */
 .bchart {
   display: flex;
