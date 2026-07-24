@@ -9,6 +9,7 @@ import { Schedule } from "./components/Schedule";
 import { AiSupport } from "./components/AiSupport";
 import { TrMetrics } from "./components/TrMetrics";
 import { InactiveStores } from "./components/InactiveStores";
+import { Inventory } from "./components/Inventory";
 import { Marketing } from "./components/Marketing";
 import { SalesStatus } from "./components/SalesStatus";
 import "./App.css";
@@ -16,6 +17,7 @@ import "./App.css";
 const NAV: NavItem[] = [
   { key: "overview", label: "전체 현황", icon: "📊" },
   { key: "sales", label: "매출현황", icon: "💰" },
+  { key: "inventory", label: "재고현황", icon: "📦" },
   { key: "tr", label: "VAN 거래현황", icon: "💳" },
   { key: "schedule", label: "일정", icon: "📅" },
   { key: "work", label: "업무현황", icon: "✅" },
@@ -127,6 +129,12 @@ function App() {
           {active === "inactive" && (
             <div className="full">
               <InactiveStores />
+            </div>
+          )}
+
+          {active === "inventory" && (
+            <div className="full">
+              <Inventory />
             </div>
           )}
         </main>

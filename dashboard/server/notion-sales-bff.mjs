@@ -511,6 +511,18 @@ app.get("/api/cms", async (_req, res) => {
 });
 app.post("/api/cms/sync", async (_req, res) => syncRoute("cms", ["hyosung-cms-scraper.mjs"], buildCms, res));
 
+// 재고현황(이카운트 ECount) — ecount-inventory-scraper 수집분(창고별 품목 현재고)
+const ECOUNT_INV_JSON = join(__dirname, "data", "ecount-inventory.json");
+async function buildInventory() {
+  const d = await readJson(ECOUNT_INV_JSON);
+  if (!d) return { warehouses: [], items: [], itemCount: 0, totalQty: 0, byWhTotal: {}, updatedAt: null, note: "아직 수집 전 — '지금 동기화' 또는 매일 08:00 자동수집 후 표시됩니다." };
+  return d;
+}
+app.get("/api/inventory", async (_req, res) => {
+  try { res.json(await buildInventory()); } catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+app.post("/api/inventory/sync", (_req, res) => syncRoute("inventory", ["ecount-inventory-scraper.mjs"], buildInventory, res));
+
 // 무실적 가맹점 — 코밴 + 다우데이타 합쳐서 VAN별 + 합산 (+ 국세청 사업자상태 병합)
 async function buildInactive() {
   const kovan = await readJson(INACTIVE_JSON);
@@ -694,9 +706,16 @@ app.get("/api/van-credentials/status", async (_req, res) => {
 
 async function runScript(scriptName) {
   const vanCreds = await loadVanCredentials().catch(() => ({}));
+  // 이카운트 재고 수집기는 헤드리스가 차단돼 실제 브라우저 창이 필요 → 서버(리눅스)에선 xvfb-run 으로 감싼다.
+  //   (로컬 Windows 는 그냥 창이 잠깐 뜬다. 다른 수집기는 헤드리스라 래핑 불필요.)
+  const needsDisplay = /ecount-inventory-scraper/.test(scriptName);
+  const useXvfb = needsDisplay && process.platform === "linux";
+  const [cmd, args] = useXvfb
+    ? ["xvfb-run", ["-a", process.execPath, join(__dirname, scriptName)]]
+    : [process.execPath, [join(__dirname, scriptName)]];
   return new Promise((resolve) => {
-    console.log(`▶ 실행: ${scriptName}`);
-    const child = spawn(process.execPath, [join(__dirname, scriptName)], {
+    console.log(`▶ 실행: ${scriptName}${useXvfb ? " (xvfb)" : ""}`);
+    const child = spawn(cmd, args, {
       cwd: dirname(__dirname),
       env: { ...freshEnv(), ...vanCreds }, // 노션 계정값 우선, 없으면 .env
     });
@@ -1432,7 +1451,7 @@ app.post("/api/blog-analyze", async (req, res) => {
     if (!key)
       return res.status(500).json({ error: "ANTHROPIC_API_KEY(.env)가 설정되지 않았습니다." });
 
-    const { title, body, model, kioskModel } = req.body ?? {};
+    const { title, body, model, kioskModel, extraPrompt, feedback, prevResult } = req.body ?? {};
     const images = Array.isArray(req.body?.images) ? req.body.images : [];
     if (!body || typeof body !== "string" || body.trim().length < 10)
       return res.status(400).json({ error: "본문 내용을 10자 이상 입력해 주세요." });
@@ -1460,11 +1479,15 @@ app.post("/api/blog-analyze", async (req, res) => {
     const kioskNote = kioskModel
       ? `\n\n[키오스크 모델명] ${kioskModel} — improvedBody에 이 모델명을 자연스럽게 포함하세요.`
       : "";
+    const promptNote =
+      typeof extraPrompt === "string" && extraPrompt.trim()
+        ? `\n\n[사용자 추가 지시] 아래 요청을 분석 기준과 개선본에 반드시 반영하세요:\n${extraPrompt.trim()}`
+        : "";
 
     const userContent = [
       {
         type: "text",
-        text: `다음 네이버 블로그 글을 분석해 주세요.${imageNote}${kioskNote}\n\n[제목]\n${
+        text: `다음 네이버 블로그 글을 분석해 주세요.${promptNote}${imageNote}${kioskNote}\n\n[제목]\n${
           title || "(제목 없음)"
         }\n\n[본문]\n${body}`,
       },
@@ -1473,6 +1496,22 @@ app.post("/api/blog-analyze", async (req, res) => {
         source: { type: "base64", media_type: im.mediaType, data: im.data },
       })),
     ];
+
+    const messages = [{ role: "user", content: userContent }];
+
+    // 재검사: 직전 결과 + 사용자가 남긴 요청(채팅)을 대화 맥락으로 이어붙인다.
+    const fb = typeof feedback === "string" ? feedback.trim() : "";
+    if (fb) {
+      if (prevResult && typeof prevResult === "object") {
+        // 모델이 실제로 출력했던 형태(메타 제외)만 assistant 턴으로 복원
+        const { usedModel: _u, cost: _c, ...clean } = prevResult;
+        messages.push({ role: "assistant", content: JSON.stringify(clean) });
+      }
+      messages.push({
+        role: "user",
+        content: `방금 제시한 분석 결과에 대해 요청드립니다:\n${fb}\n\n이 요청을 반영하여 같은 블로그 글을 다시 분석하고, 반드시 처음과 동일한 JSON 형식으로만(코드블록·설명 없이) 응답하세요.`,
+      });
+    }
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1485,7 +1524,7 @@ app.post("/api/blog-analyze", async (req, res) => {
         model: modelId,
         max_tokens: 8192,
         system: BLOG_SYSTEM,
-        messages: [{ role: "user", content: userContent }],
+        messages,
       }),
     });
     const j = await r.json();
@@ -1513,6 +1552,105 @@ app.post("/api/blog-analyze", async (req, res) => {
       return res.status(429).json({ error: "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요." });
     if (msg.includes("JSON"))
       return res.status(502).json({ error: "분석 결과 형식이 올바르지 않습니다. 다시 시도해 주세요." });
+    res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+
+// ===== 블로그 글 '생성' — 사용자가 준 지시문(프롬프트)으로 블로그 글을 작성 (Claude) =====
+const BLOG_GEN_FALLBACK_SYSTEM =
+  "당신은 무인매장 솔루션 기업 '다인아이앤씨'의 키오스크 설치·기술 담당자입니다. " +
+  "사용자가 준 주제·매장 정보를 바탕으로, 설치 담당자 1인칭 시점의 네이버 블로그 방문 설치후기를 " +
+  "존댓말 구어체로 2,000~3,000자 작성하세요. 입력되지 않은 수치·후기는 지어내지 말고, 과장·낚시 표현을 피하세요.";
+
+app.post("/api/blog-generate", async (req, res) => {
+  try {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key)
+      return res.status(500).json({ error: "ANTHROPIC_API_KEY(.env)가 설정되지 않았습니다." });
+
+    const { topic, systemPrompt, model, feedback, prevText } = req.body ?? {};
+    const images = Array.isArray(req.body?.images) ? req.body.images : [];
+    if (!topic || typeof topic !== "string" || topic.trim().length < 5)
+      return res.status(400).json({ error: "주제·매장 정보를 5자 이상 입력해 주세요." });
+
+    const modelId = BLOG_MODELS[model] ? model : BLOG_DEFAULT_MODEL;
+    const cfg = BLOG_MODELS[modelId];
+    const sys =
+      typeof systemPrompt === "string" && systemPrompt.trim()
+        ? systemPrompt.trim()
+        : BLOG_GEN_FALLBACK_SYSTEM;
+
+    const validImages = images
+      .filter(
+        (im) =>
+          im &&
+          BLOG_ALLOWED_IMG.includes(im.mediaType) &&
+          typeof im.data === "string" &&
+          im.data.length > 0
+      )
+      .slice(0, 6);
+
+    let imageNote = "";
+    if (validImages.length > 0) {
+      const names = validImages.map((im, i) => im.name || `사진${i + 1}`).join(", ");
+      imageNote =
+        `\n\n[첨부 사진] ${validImages.length}장: ${names}\n` +
+        "본문 안에서 각 사진이 들어가면 좋은 위치에 (사진: 파일명) 형식으로 표시하세요. " +
+        "반드시 위 파일명으로만 지칭하고, 첨부되지 않은 사진은 지어내지 마세요.";
+    }
+
+    const firstUserContent = [
+      { type: "text", text: `${topic.trim()}${imageNote}` },
+      ...validImages.map((im) => ({
+        type: "image",
+        source: { type: "base64", media_type: im.mediaType, data: im.data },
+      })),
+    ];
+    const messages = [{ role: "user", content: firstUserContent }];
+
+    // 이어서 요청: 직전 결과 + 사용자 추가 요청을 대화 맥락으로 이어붙인다.
+    const fb = typeof feedback === "string" ? feedback.trim() : "";
+    if (fb) {
+      if (typeof prevText === "string" && prevText.trim())
+        messages.push({ role: "assistant", content: prevText });
+      messages.push({
+        role: "user",
+        content: `방금 작성한 글에 대해 요청드립니다:\n${fb}\n\n이 요청을 반영해 같은 형식으로 글을 다시 작성해 주세요.`,
+      });
+    }
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 8192,
+        system: sys,
+        messages,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j?.error?.message || `Claude API ${r.status}`);
+
+    const text = (j.content ?? []).map((b) => b.text || "").join("").trim();
+
+    const inTok = j.usage?.input_tokens || 0;
+    const outTok = j.usage?.output_tokens || 0;
+    const usd = (inTok * cfg.priceIn + outTok * cfg.priceOut) / 1_000_000;
+
+    res.json({
+      text,
+      usedModel: modelId,
+      cost: { inputTokens: inTok, outputTokens: outTok, usd, krw: Math.round(usd * 1400) },
+    });
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (/quota|rate|429|overloaded/i.test(msg))
+      return res.status(429).json({ error: "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요." });
     res.status(500).json({ error: msg.slice(0, 200) });
   }
 });
@@ -2900,6 +3038,7 @@ const COLLECT_SCRIPTS = [
   "merchant-openings-scraper.mjs",
   "terminal-total-scraper.mjs",
   "amudo-sales-scraper.mjs",
+  "ecount-inventory-scraper.mjs",
 ];
 
 // 페이지(메뉴)별 수집 스코프 — 수동 '데이터 동기화' 버튼은 현재 화면에 필요한 스크래퍼만 실행.
@@ -2911,6 +3050,7 @@ const COLLECT_SCOPES = {
   tr: TR_CMS,                                           // 거래 건수·금액·CMS
   metrics: TR_CMS,                                      // 경영지표 요약
   inactive: ["kovan-inactive-scraper.mjs", "ddwm-inactive-scraper.mjs"], // 무실적 가맹점
+  inventory: ["ecount-inventory-scraper.mjs"], // 재고현황(이카운트)
   // marketing·aisupport·schedule·work: 서버 수집 스크래퍼 없음 → 화면 재조회만
 };
 let collectState = { running: false, startedAt: null, finishedAt: null, ok: null, errors: [], auto: false };
