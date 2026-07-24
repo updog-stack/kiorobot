@@ -48,7 +48,7 @@ async function login(page) {
   let entered = false;
   while (Date.now() < deadline) {
     await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button,a")].find((e) => e.offsetParent !== null && /^등록안함$/.test((e.innerText || "").trim()));
+      const b = [...document.querySelectorAll("button,a")].find((e) => e.offsetParent !== null && /^(등록안함|Do Not Register)$/i.test((e.innerText || "").trim()));
       if (b) b.click();
     }).catch(() => {});
     if (await page.locator("#inputFavMSearch").isVisible().catch(() => false)) { entered = true; break; }
@@ -93,7 +93,9 @@ async function main() {
   const baseDate = `${y}${m}${d}`;
 
   const browser = await chromium.launch({ headless: HEADLESS });
-  const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+  // locale 고정 필수: 서버(리눅스)는 시스템 로케일이 영어라 이카운트 UI가 영어로 뜬다.
+  //   → 메뉴명('창고별재고현황')·컬럼('재고수량')이 한글이어야 검색/파싱이 된다.
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true, locale: "ko-KR" });
   const page = await ctx.newPage();
   try {
     await login(page);
